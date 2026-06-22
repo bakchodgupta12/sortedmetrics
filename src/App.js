@@ -1070,6 +1070,18 @@ function diffSeries(a, b) {
     return (a[i] || 0) - (b[i] || 0);
   });
 }
+// Mean of a series across the months that have a value (null if none).
+function seriesAvg(s) {
+  let acc = 0;
+  let n = 0;
+  for (let i = 0; i < 12; i++) {
+    if (s[i] != null) {
+      acc += s[i];
+      n += 1;
+    }
+  }
+  return n === 0 ? null : acc / n;
+}
 // Sum of a series from Jan through `latest`.
 function seriesSum(s, latest) {
   if (latest < 0) return null;
@@ -1237,7 +1249,7 @@ function DividerRow() {
   );
 }
 
-function MetricTable({ yearData, rows, updateMetric }) {
+function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD' }) {
   const latest = latestMonthIndex(yearData);
   // Calculated rows get a subtle brand-gray tint (not an accent fill).
   const calcBg = C.gray200;
@@ -1247,6 +1259,7 @@ function MetricTable({ yearData, rows, updateMetric }) {
     if (latest < 0 || mode === 'none') return null;
     if (mode === 'last') return getVal(yearData, key, latest);
     const s = rawSeries(yearData, key);
+    if (mode === 'avg') return seriesAvg(s);
     return seriesSum(s, latest);
   };
 
@@ -1285,7 +1298,7 @@ function MetricTable({ yearData, rows, updateMetric }) {
                 borderLeft: `1px solid ${C.border}`,
               }}
             >
-              YTD
+              {totalLabel}
             </th>
           </tr>
         </thead>
@@ -1340,6 +1353,7 @@ function MetricTable({ yearData, rows, updateMetric }) {
                       }}
                     >
                       {row.label}
+                      {row.info && <InfoTip text={row.info} />}
                     </td>
                     {MONTHS.map((m, i) => (
                       <td key={m} style={{ textAlign: 'right', padding: '4px 6px' }}>
@@ -1617,48 +1631,59 @@ function DownloadsTab({ yearData, updateMetric, allYears, activeYear }) {
 // Users tab
 // ─────────────────────────────────────────────────────────────────────────────
 function UsersTab({ yearData, updateMetric }) {
-  const latest = latestMonthIndex(yearData);
-  const newUsers = rawSeries(yearData, 'u_newUsers');
   const mau = rawSeries(yearData, 'u_mau');
   const dau = rawSeries(yearData, 'u_dau');
-  const churned = rawSeries(yearData, 'u_churned');
-
-  const dauMau = pctSeries(dau, mau);
-  const netGrowth = diffSeries(newUsers, churned);
-  const cumUsers = cumulativeSeries(newUsers);
-
-  const nuY = seriesSum(newUsers, latest);
-  const chY = seriesSum(churned, latest);
+  const dauMau = pctSeries(dau, mau); // point-in-time monthly stickiness
 
   const rows = [
-    { kind: 'input', key: 'u_mau', label: 'Monthly Active Users', unit: 'count', ytd: 'last' },
-    { kind: 'input', key: 'u_dau', label: 'Daily Active Users', unit: 'count', ytd: 'last' },
-    { kind: 'input', key: 'u_churned', label: 'Churned Users', unit: 'count' },
-    calc('DAU / MAU', 'percent', dauMau, pct(valueAt(dau, latest), valueAt(mau, latest)), 'DAU ÷ MAU (latest month for YTD).'),
-    calc('Net User Growth', 'count', netGrowth, nuY == null && chY == null ? null : (nuY || 0) - (chY || 0), 'New users (from Installs & Users) − churned users.'),
+    { kind: 'subhead', label: 'Active Users' },
+    { kind: 'input', key: 'u_dau', label: 'Daily Active Users', unit: 'count', ytd: 'avg' },
+    { kind: 'input', key: 'u_mau', label: 'Monthly Active Users', unit: 'count', ytd: 'avg' },
+    calc(
+      'DAU / MAU Ratio',
+      'percent',
+      dauMau,
+      seriesAvg(dauMau),
+      'Stickiness — the share of monthly active users who use Sorted on an average day (DAU ÷ MAU). Higher means users return more often. A wallet used for daily payments should trend higher than one used only for occasional remittance.'
+    ),
+    { kind: 'subhead', label: 'Cohort Retention' },
+    {
+      kind: 'input',
+      key: 'u_d1Retention',
+      label: 'D1 Retention',
+      unit: 'percent',
+      ytd: 'none',
+      info: 'Of users who installed this month, the share who returned the next day.',
+    },
+    {
+      kind: 'input',
+      key: 'u_d7Retention',
+      label: 'D7 Retention',
+      unit: 'percent',
+      ytd: 'none',
+      info: 'Of users who installed this month, the share who returned 7 days later.',
+    },
+    {
+      kind: 'input',
+      key: 'u_d30Retention',
+      label: 'D30 Retention',
+      unit: 'percent',
+      ytd: 'none',
+      info: 'Of users who installed this month, the share who returned 30 days later.',
+    },
   ];
-
-  const data = monthChartData({ MAU: mau, 'New Users': newUsers, 'Cumulative Users': cumUsers });
 
   return (
     <div style={{ display: 'grid', gap: 16 }}>
       <Card accent={C.primary}>
         <TabTitle title="Retention" accent={C.green} />
-        <MetricTable yearData={yearData} rows={rows} updateMetric={updateMetric} />
+        <MetricTable
+          yearData={yearData}
+          rows={rows}
+          updateMetric={updateMetric}
+          totalLabel="Avg"
+        />
       </Card>
-      <ChartCard title="MAU vs New Users (with Cumulative Users)" accent={C.green}>
-        <ComposedChart data={data} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
-          <CartesianGrid {...GRID} />
-          <XAxis {...X_AXIS} />
-          <YAxis {...yAxis()} yAxisId="left" />
-          <YAxis {...yAxis({ orientation: 'right' })} yAxisId="right" />
-          <Tooltip content={<ChartTooltip fmt={fmtNumber} />} />
-          <Legend wrapperStyle={{ fontSize: 11 }} />
-          <Bar yAxisId="left" dataKey="MAU" fill={C.blue} barSize={18} radius={[4, 4, 0, 0]} />
-          <Bar yAxisId="left" dataKey="New Users" fill={C.green} barSize={18} radius={[4, 4, 0, 0]} />
-          <Line yAxisId="right" type="monotone" dataKey="Cumulative Users" stroke={C.purple} strokeWidth={2} dot={false} connectNulls />
-        </ComposedChart>
-      </ChartCard>
     </div>
   );
 }
