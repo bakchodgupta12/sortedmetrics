@@ -134,7 +134,7 @@ function Card({ accent, style, children }) {
 
 const TABS = [
   'Dashboard',
-  'Downloads & Users',
+  'Installs & Users',
   'Retention',
   'Transactions',
   'Top-up Cards',
@@ -728,6 +728,7 @@ function Dashboard({ user, setUser, onLogout }) {
           yearData={yearData}
           activeYear={activeYear}
           years={years}
+          allYears={data.years}
           user={user}
           setUser={setUser}
           updateMetric={updateMetric}
@@ -1034,6 +1035,34 @@ function cumulativeSeries(s) {
     }
     return has ? run : null;
   });
+}
+// Like cumulativeSeries but seeded with a starting `base` (prior years' total),
+// so a lifetime running total carries forward across years instead of resetting.
+function cumulativeSeriesFrom(s, base) {
+  let run = base || 0;
+  let has = (base || 0) > 0;
+  return IDX.map((i) => {
+    if (s[i] != null) {
+      run += s[i];
+      has = true;
+    }
+    return has ? run : null;
+  });
+}
+// Lifetime total of `keys` summed over every month of all years strictly
+// before `activeYear` — the carry-forward seed for cumulative rows.
+function priorYearsTotal(allYears, activeYear, keys) {
+  let total = 0;
+  for (const [y, yd] of Object.entries(allYears || {})) {
+    if (Number(y) >= activeYear) continue;
+    for (let i = 0; i < 12; i++) {
+      for (const k of keys) {
+        const v = yd?.[k]?.[MONTHS[i]];
+        if (typeof v === 'number' && Number.isFinite(v)) total += v;
+      }
+    }
+  }
+  return total;
 }
 function diffSeries(a, b) {
   return IDX.map((i) => {
@@ -1477,7 +1506,7 @@ const TwoCol = ({ children }) => (
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Downloads tab
+// Installs & Users tab (internal keys keep the legacy "download" naming)
 // ─────────────────────────────────────────────────────────────────────────────
 const STORE_KEYS = [
   ['dl_kaios', 'KaiOS', C.blue],
@@ -1487,30 +1516,42 @@ const STORE_KEYS = [
   ['dl_vivoStore', 'Vivo Store', C.red],
 ];
 
-function DownloadsTab({ yearData, updateMetric }) {
+function DownloadsTab({ yearData, updateMetric, allYears, activeYear }) {
   const latest = latestMonthIndex(yearData);
   const storeKeys = STORE_KEYS.map((s) => s[0]);
 
-  const newDownloads = sumSeries(yearData, storeKeys);
-  const cumDownloads = cumulativeSeries(newDownloads);
+  const newDownloads = sumSeries(yearData, storeKeys); // "new installs" (display)
   const newUsers = rawSeries(yearData, 'u_newUsers');
-  const cumUsers = cumulativeSeries(newUsers);
-  const conversion = pctSeries(newUsers, newDownloads); // monthly
-  const cumConversion = pctSeries(cumUsers, cumDownloads); // to-date
 
-  const ndY = seriesSum(newDownloads, latest);
+  // Lifetime running totals carry forward across years (this tab only): seed
+  // each year's cumulative from the sum of all prior years.
+  const baseInstalls = priorYearsTotal(allYears, activeYear, storeKeys);
+  const baseUsers = priorYearsTotal(allYears, activeYear, ['u_newUsers']);
+  const cumDownloads = cumulativeSeriesFrom(newDownloads, baseInstalls);
+  const cumUsers = cumulativeSeriesFrom(newUsers, baseUsers);
+
+  const conversion = pctSeries(newUsers, newDownloads); // monthly
+  const cumConversion = pctSeries(cumUsers, cumDownloads); // all-time
+
+  const ndY = seriesSum(newDownloads, latest); // year-to-date (this year only)
   const nuY = seriesSum(newUsers, latest);
 
+  // Lifetime figures for the cumulative rows' total column.
+  const lifeInstalls =
+    latest >= 0 ? valueAt(cumDownloads, latest) : baseInstalls > 0 ? baseInstalls : null;
+  const lifeUsers =
+    latest >= 0 ? valueAt(cumUsers, latest) : baseUsers > 0 ? baseUsers : null;
+
   const rows = [
-    { kind: 'subhead', label: 'Downloads' },
+    { kind: 'subhead', label: 'Installs' },
     ...STORE_KEYS.map(([key, label]) => ({ kind: 'input', key, label, unit: 'count' })),
-    calc('New Downloads', 'count', newDownloads, ndY, 'Sum of all store downloads for the month.'),
+    calc('New Installs', 'count', newDownloads, ndY, 'Total app installs across all stores in the month.'),
     calc(
-      'Cumulative Downloads',
+      'Total Installs',
       'count',
       cumDownloads,
-      valueAt(cumDownloads, latest),
-      'Running total of new downloads from January.'
+      lifeInstalls,
+      'Cumulative installs across all stores since launch.'
     ),
     { kind: 'subhead', label: 'Users' },
     { kind: 'input', key: 'u_newUsers', label: 'New Users', unit: 'count' },
@@ -1518,23 +1559,23 @@ function DownloadsTab({ yearData, updateMetric }) {
       'Total Users',
       'count',
       cumUsers,
-      valueAt(cumUsers, latest),
-      'Running total of new users from January.'
+      lifeUsers,
+      'Cumulative registered users since launch.'
     ),
     { kind: 'subhead', label: 'User Conversion Rate' },
     calc(
-      'User Conversion Rate',
+      'Monthly',
       'percent',
       conversion,
       pct(nuY, ndY),
-      'New users ÷ new downloads, for the month.'
+      'The rate at which new installs converted to users this month (new users this month ÷ new installs this month).'
     ),
     calc(
-      'Cumulative Conversion Rate',
+      'Overall',
       'percent',
       cumConversion,
-      pct(valueAt(cumUsers, latest), valueAt(cumDownloads, latest)),
-      'Total users to date ÷ cumulative downloads to date.'
+      pct(lifeUsers, lifeInstalls),
+      'The rate at which all-time installs have converted into registered users (total users ÷ total installs).'
     ),
   ];
 
@@ -1545,10 +1586,10 @@ function DownloadsTab({ yearData, updateMetric }) {
   return (
     <div style={{ display: 'grid', gap: 16 }}>
       <Card accent={C.primary}>
-        <TabTitle title="Downloads & Users" accent={C.blue} />
+        <TabTitle title="Installs & Users" accent={C.blue} />
         <MetricTable yearData={yearData} rows={rows} updateMetric={updateMetric} />
       </Card>
-      <ChartCard title="Downloads by Store" accent={C.blue}>
+      <ChartCard title="Installs by Store" accent={C.blue}>
         <LineChart data={storeData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
           <CartesianGrid {...GRID} />
           <XAxis {...X_AXIS} />
@@ -1594,7 +1635,7 @@ function UsersTab({ yearData, updateMetric }) {
     { kind: 'input', key: 'u_dau', label: 'Daily Active Users', unit: 'count', ytd: 'last' },
     { kind: 'input', key: 'u_churned', label: 'Churned Users', unit: 'count' },
     calc('DAU / MAU', 'percent', dauMau, pct(valueAt(dau, latest), valueAt(mau, latest)), 'DAU ÷ MAU (latest month for YTD).'),
-    calc('Net User Growth', 'count', netGrowth, nuY == null && chY == null ? null : (nuY || 0) - (chY || 0), 'New users (from Downloads & Users) − churned users.'),
+    calc('Net User Growth', 'count', netGrowth, nuY == null && chY == null ? null : (nuY || 0) - (chY || 0), 'New users (from Installs & Users) − churned users.'),
   ];
 
   const data = monthChartData({ MAU: mau, 'New Users': newUsers, 'Cumulative Users': cumUsers });
@@ -1888,7 +1929,7 @@ function CampaignsTab({ yearData, updateMetric }) {
     { kind: 'input', key: 'dl_ambassadorCosts', label: 'Ambassador Costs', unit: 'usd' },
     { kind: 'input', key: 'dl_paidCampaignSpend', label: 'Paid Campaign Spend', unit: 'usd' },
     calc('Total Marketing Spend', 'usd', totalMarketing, tmY, 'Ambassador costs + paid campaign spend.'),
-    calc('Cost Per New Download', 'ratio', cpnd, safeDiv(tmY, ndY), 'Total marketing spend ÷ new downloads.'),
+    calc('Cost Per New Install', 'ratio', cpnd, safeDiv(tmY, ndY), 'Total marketing spend ÷ new installs.'),
     calc('Cost Per New User', 'ratio', cpnu, safeDiv(tmY, nuY), 'Total marketing spend ÷ new users.'),
   ];
 
@@ -1996,14 +2037,14 @@ function DashboardTab({ yearData, activeYear }) {
   const totalVol = sumSeries(yearData, valueKeys);
 
   const kpis = [
-    { label: 'Total Downloads YTD', value: fmtNumber(seriesSum(newDownloads, latest)), accent: C.blue },
+    { label: 'Total Installs YTD', value: fmtNumber(seriesSum(newDownloads, latest)), accent: C.blue },
     { label: 'New Users YTD', value: fmtNumber(seriesSum(newUsers, latest)), accent: C.green },
     { label: 'MAU (latest month)', value: fmtNumber(valueAt(mau, latest)), accent: C.blue },
     { label: 'Total Transactions YTD', value: fmtNumber(seriesSum(totalTx, latest)), accent: C.amber },
     { label: 'Cards Sold YTD', value: fmtNumber(seriesSum(rawSeries(yearData, 'c_sold'), latest)), accent: C.purple },
     { label: 'Cards Redeemed YTD', value: fmtNumber(seriesSum(rawSeries(yearData, 'c_redeemed'), latest)), accent: C.purple },
     {
-      label: 'Download → User Conversion (latest)',
+      label: 'Install → User Conversion (latest)',
       value: fmtPercent(pct(valueAt(newUsers, latest), valueAt(newDownloads, latest))),
       accent: C.blue,
     },
@@ -2014,7 +2055,7 @@ function DashboardTab({ yearData, activeYear }) {
     },
   ];
 
-  const downloadsData = monthChartData({ Downloads: newDownloads });
+  const downloadsData = monthChartData({ Installs: newDownloads });
   const mauData = monthChartData({ MAU: mau });
   const volData = monthChartData({ Volume: totalVol });
 
@@ -2045,14 +2086,14 @@ function DashboardTab({ yearData, activeYear }) {
       </div>
 
       <TwoCol>
-        <ChartCard title="Monthly Downloads" accent={C.green}>
+        <ChartCard title="Monthly Installs" accent={C.green}>
           <AreaChart data={downloadsData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
             {gradient('dashDownloads', C.green)}
             <CartesianGrid {...GRID} />
             <XAxis {...X_AXIS} />
             <YAxis {...yAxis()} />
             <Tooltip content={<ChartTooltip fmt={fmtNumber} />} />
-            <Area type="monotone" dataKey="Downloads" stroke={C.green} strokeWidth={2} fill="url(#dashDownloads)" connectNulls />
+            <Area type="monotone" dataKey="Installs" stroke={C.green} strokeWidth={2} fill="url(#dashDownloads)" connectNulls />
           </AreaChart>
         </ChartCard>
         <ChartCard title="Monthly Active Users" accent={C.blue}>
@@ -2092,11 +2133,12 @@ function TabContent({
   updateNote,
   onDeleteYear,
   onLogout,
+  allYears,
 }) {
   const common = { yearData, activeYear, updateMetric, updateNote };
   switch (tab) {
-    case 'Downloads & Users':
-      return <DownloadsTab {...common} />;
+    case 'Installs & Users':
+      return <DownloadsTab {...common} allYears={allYears} />;
     case 'Retention':
       return <UsersTab {...common} />;
     case 'Transactions':
