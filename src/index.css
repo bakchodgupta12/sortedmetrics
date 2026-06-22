@@ -1,0 +1,62 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=Lora:wght@500;600;700&display=swap');
+
+/* ── Design tokens ─────────────────────────────────────────── */
+:root {
+  --bg: #f7f5f0;
+  --card: #ffffff;
+  --border: #e8e4dc;
+  --radius: 14px;
+
+  --green: #6dbb8a;
+  --red: #d96b6b;
+  --amber: #e8a838;
+  --blue: #5b9bd5;
+  --blue-light: #7eb5d6;
+  --purple: #9b8ec4;
+
+  --text: #2c2a26;
+  --muted: #9e9890;
+
+  --font-body: 'DM Sans', system-ui, -apple-system, sans-serif;
+  --font-head: 'Lora', Georgia, serif;
+}
+
+/* ── Reset ─────────────────────────────────────────────────── */
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  font-family: var(--font-head);
+  font-weight: 600;
+  margin: 0;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+a {
+  color: inherit;
+}
