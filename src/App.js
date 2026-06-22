@@ -139,6 +139,7 @@ const TABS = [
   'Transactions',
   'Top-up Cards',
   'Costs & Revenue',
+  'Campaigns',
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1489,22 +1490,19 @@ const STORE_KEYS = [
 function DownloadsTab({ yearData, updateMetric }) {
   const latest = latestMonthIndex(yearData);
   const storeKeys = STORE_KEYS.map((s) => s[0]);
-  const acqKeys = ['dl_ambassadorCosts', 'dl_paidCampaignSpend'];
 
   const newDownloads = sumSeries(yearData, storeKeys);
   const cumDownloads = cumulativeSeries(newDownloads);
   const newUsers = rawSeries(yearData, 'u_newUsers');
-  const conversion = pctSeries(newUsers, newDownloads);
-  const totalMarketing = sumSeries(yearData, acqKeys);
-  const cpnd = ratioSeries(totalMarketing, newDownloads);
-  const cpnu = ratioSeries(totalMarketing, newUsers);
+  const cumUsers = cumulativeSeries(newUsers);
+  const conversion = pctSeries(newUsers, newDownloads); // monthly
+  const cumConversion = pctSeries(cumUsers, cumDownloads); // to-date
 
   const ndY = seriesSum(newDownloads, latest);
   const nuY = seriesSum(newUsers, latest);
-  const tmY = seriesSum(totalMarketing, latest);
 
   const rows = [
-    { kind: 'subhead', label: 'Downloads by store' },
+    { kind: 'subhead', label: 'Downloads' },
     ...STORE_KEYS.map(([key, label]) => ({ kind: 'input', key, label, unit: 'count' })),
     calc('New Downloads', 'count', newDownloads, ndY, 'Sum of all store downloads for the month.'),
     calc(
@@ -1514,14 +1512,30 @@ function DownloadsTab({ yearData, updateMetric }) {
       valueAt(cumDownloads, latest),
       'Running total of new downloads from January.'
     ),
+    { kind: 'subhead', label: 'Users' },
     { kind: 'input', key: 'u_newUsers', label: 'New Users', unit: 'count' },
-    calc('User Conversion Rate', 'percent', conversion, pct(nuY, ndY), 'New users ÷ new downloads.'),
-    { kind: 'subhead', label: 'Acquisition' },
-    { kind: 'input', key: 'dl_ambassadorCosts', label: 'Ambassador Costs', unit: 'usd' },
-    { kind: 'input', key: 'dl_paidCampaignSpend', label: 'Paid Campaign Spend', unit: 'usd' },
-    calc('Total Marketing Spend', 'usd', totalMarketing, tmY, 'Ambassador costs + paid campaign spend.'),
-    calc('Cost Per New Download', 'ratio', cpnd, safeDiv(tmY, ndY), 'Total marketing spend ÷ new downloads.'),
-    calc('Cost Per New User', 'ratio', cpnu, safeDiv(tmY, nuY), 'Total marketing spend ÷ new users.'),
+    calc(
+      'Total Users',
+      'count',
+      cumUsers,
+      valueAt(cumUsers, latest),
+      'Running total of new users from January.'
+    ),
+    { kind: 'subhead', label: 'User Conversion Rate' },
+    calc(
+      'User Conversion Rate',
+      'percent',
+      conversion,
+      pct(nuY, ndY),
+      'New users ÷ new downloads, for the month.'
+    ),
+    calc(
+      'Cumulative Conversion Rate',
+      'percent',
+      cumConversion,
+      pct(valueAt(cumUsers, latest), valueAt(cumDownloads, latest)),
+      'Total users to date ÷ cumulative downloads to date.'
+    ),
   ];
 
   const storeData = monthChartData(
@@ -1581,7 +1595,6 @@ function UsersTab({ yearData, updateMetric }) {
     { kind: 'input', key: 'u_churned', label: 'Churned Users', unit: 'count' },
     calc('DAU / MAU', 'percent', dauMau, pct(valueAt(dau, latest), valueAt(mau, latest)), 'DAU ÷ MAU (latest month for YTD).'),
     calc('Net User Growth', 'count', netGrowth, nuY == null && chY == null ? null : (nuY || 0) - (chY || 0), 'New users (from Downloads & Users) − churned users.'),
-    calc('Cumulative Total Users', 'count', cumUsers, valueAt(cumUsers, latest), 'Running total of new users from January.'),
   ];
 
   const data = monthChartData({ MAU: mau, 'New Users': newUsers, 'Cumulative Users': cumUsers });
@@ -1852,6 +1865,49 @@ function RevenueTab({ yearData, updateMetric }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Campaigns tab (stub) — holds the relocated Acquisition section for now;
+// per-campaign tracking (spend / CAC / ROI by channel) comes in a later phase.
+// ─────────────────────────────────────────────────────────────────────────────
+function CampaignsTab({ yearData, updateMetric }) {
+  const latest = latestMonthIndex(yearData);
+  const storeKeys = STORE_KEYS.map((s) => s[0]);
+  const acqKeys = ['dl_ambassadorCosts', 'dl_paidCampaignSpend'];
+
+  const newDownloads = sumSeries(yearData, storeKeys);
+  const newUsers = rawSeries(yearData, 'u_newUsers');
+  const totalMarketing = sumSeries(yearData, acqKeys);
+  const cpnd = ratioSeries(totalMarketing, newDownloads);
+  const cpnu = ratioSeries(totalMarketing, newUsers);
+
+  const ndY = seriesSum(newDownloads, latest);
+  const nuY = seriesSum(newUsers, latest);
+  const tmY = seriesSum(totalMarketing, latest);
+
+  const rows = [
+    { kind: 'subhead', label: 'Acquisition' },
+    { kind: 'input', key: 'dl_ambassadorCosts', label: 'Ambassador Costs', unit: 'usd' },
+    { kind: 'input', key: 'dl_paidCampaignSpend', label: 'Paid Campaign Spend', unit: 'usd' },
+    calc('Total Marketing Spend', 'usd', totalMarketing, tmY, 'Ambassador costs + paid campaign spend.'),
+    calc('Cost Per New Download', 'ratio', cpnd, safeDiv(tmY, ndY), 'Total marketing spend ÷ new downloads.'),
+    calc('Cost Per New User', 'ratio', cpnu, safeDiv(tmY, nuY), 'Total marketing spend ÷ new users.'),
+  ];
+
+  return (
+    <div style={{ display: 'grid', gap: 16 }}>
+      <Card accent={C.primary}>
+        <TabTitle title="Campaigns" accent={C.blue} />
+        <p style={{ fontSize: 13, color: C.muted, marginTop: 0, marginBottom: 16 }}>
+          Per-campaign tracking — individual campaign spend, CAC and ROI by
+          channel — is coming soon. For now, overall acquisition spend and the
+          blended cost metrics live here.
+        </p>
+        <MetricTable yearData={yearData} rows={rows} updateMetric={updateMetric} />
+      </Card>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Export seam — the per-tab "Download" and "Download all" exports are planned
 // for a later phase. The button is rendered (disabled) so the placement and
 // data wiring are in place; hook up `onClick` when the feature is built.
@@ -2049,6 +2105,8 @@ function TabContent({
       return <CardsTab {...common} />;
     case 'Costs & Revenue':
       return <RevenueTab {...common} />;
+    case 'Campaigns':
+      return <CampaignsTab {...common} />;
     case 'Settings':
       return (
         <SettingsTab
