@@ -1107,7 +1107,7 @@ function Cell({ value, unit, onCommit }) {
         if (e.key === 'Enter') e.currentTarget.blur();
       }}
       style={{
-        width: 62,
+        width: 66,
         textAlign: 'right',
         fontFamily: 'inherit',
         fontSize: 13,
@@ -1115,7 +1115,7 @@ function Cell({ value, unit, onCommit }) {
         background: 'transparent',
         border: 'none',
         borderBottom: `1px solid ${focused ? C.blueLight : 'transparent'}`,
-        padding: '5px 3px',
+        padding: '6px 4px',
         outline: 'none',
       }}
     />
@@ -1194,10 +1194,22 @@ const thBase = {
   letterSpacing: '0.08em',
   textTransform: 'uppercase',
   color: C.muted,
-  padding: '8px 4px',
+  padding: '10px 10px',
   textAlign: 'right',
   whiteSpace: 'nowrap',
 };
+
+// Whitespace + a thin rule that separates a calculated block from the next
+// section, so groups don't run straight into one another.
+function DividerRow() {
+  return (
+    <tr aria-hidden="true">
+      <td colSpan={14} style={{ padding: 0 }}>
+        <div style={{ height: 1, background: C.border, margin: '12px 0 2px' }} />
+      </td>
+    </tr>
+  );
+}
 
 function MetricTable({ yearData, rows, updateMetric, accent = C.blue }) {
   const latest = latestMonthIndex(yearData);
@@ -1213,7 +1225,7 @@ function MetricTable({ yearData, rows, updateMetric, accent = C.blue }) {
 
   return (
     <div style={{ overflowX: 'auto' }}>
-      <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 920 }}>
+      <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 1060 }}>
         <thead>
           <tr style={{ borderBottom: `1px solid ${C.border}` }}>
             <th
@@ -1239,63 +1251,78 @@ function MetricTable({ yearData, rows, updateMetric, accent = C.blue }) {
         </thead>
         <tbody>
           {rows.map((row, ri) => {
+            // A break (gap + rule) goes after a calculated block whenever the
+            // next row starts a new group (an input or a section header).
+            const prev = rows[ri - 1];
+            const needsBreak =
+              prev && prev.kind === 'calc' && row.kind !== 'calc';
+
             if (row.kind === 'subhead') {
               return (
-                <tr key={`s${ri}`}>
-                  <td
-                    colSpan={14}
-                    style={{
-                      ...thBase,
-                      textAlign: 'left',
-                      paddingLeft: 8,
-                      paddingTop: 16,
-                      color: C.text,
-                    }}
-                  >
-                    {row.label}
-                  </td>
-                </tr>
+                <React.Fragment key={`s${ri}`}>
+                  {needsBreak && <DividerRow />}
+                  <tr>
+                    <td
+                      colSpan={14}
+                      style={{
+                        fontSize: 12,
+                        fontWeight: 700,
+                        letterSpacing: '0.06em',
+                        textTransform: 'uppercase',
+                        color: C.text,
+                        textAlign: 'left',
+                        padding: '14px 8px 6px',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {row.label}
+                    </td>
+                  </tr>
+                </React.Fragment>
               );
             }
 
             if (row.kind === 'input') {
               const ytd = inputYtd(row.key, row.ytd || 'sum');
               return (
-                <tr key={row.key} style={{ borderBottom: `1px solid ${C.bg}` }}>
-                  <td
-                    style={{
-                      textAlign: 'left',
-                      fontSize: 13,
-                      padding: '2px 8px',
-                      whiteSpace: 'nowrap',
-                      position: 'sticky',
-                      left: 0,
-                      background: C.card,
-                    }}
-                  >
-                    {row.label}
-                  </td>
-                  {MONTHS.map((m, i) => (
-                    <td key={m} style={{ textAlign: 'right', padding: '0 1px' }}>
-                      <Cell
-                        value={getVal(yearData, row.key, i)}
-                        unit={row.unit}
-                        onCommit={(v) => updateMetric(row.key, m, v)}
-                      />
+                <React.Fragment key={row.key}>
+                  {needsBreak && <DividerRow />}
+                  <tr style={{ borderBottom: `1px solid ${C.bg}` }}>
+                    <td
+                      style={{
+                        textAlign: 'left',
+                        fontSize: 13,
+                        padding: '7px 14px 7px 8px',
+                        whiteSpace: 'nowrap',
+                        position: 'sticky',
+                        left: 0,
+                        background: C.card,
+                      }}
+                    >
+                      {row.label}
                     </td>
-                  ))}
-                  <td
-                    style={{
-                      textAlign: 'right',
-                      fontSize: 13,
-                      padding: '2px 6px',
-                      borderLeft: `1px solid ${C.border}`,
-                      color: C.muted,
-                    }}
-                  >
-                    {ytd == null ? DASH : fmtByUnit(ytd, row.unit)}
-                  </td>
-                </tr>
+                    {MONTHS.map((m, i) => (
+                      <td key={m} style={{ textAlign: 'right', padding: '4px 6px' }}>
+                        <Cell
+                          value={getVal(yearData, row.key, i)}
+                          unit={row.unit}
+                          onCommit={(v) => updateMetric(row.key, m, v)}
+                        />
+                      </td>
+                    ))}
+                    <td
+                      style={{
+                        textAlign: 'right',
+                        fontSize: 13,
+                        padding: '7px 12px',
+                        borderLeft: `1px solid ${C.border}`,
+                        color: C.muted,
+                      }}
+                    >
+                      {ytd == null ? DASH : fmtByUnit(ytd, row.unit)}
+                    </td>
+                  </tr>
+                </React.Fragment>
               );
             }
 
@@ -1307,7 +1334,7 @@ function MetricTable({ yearData, rows, updateMetric, accent = C.blue }) {
                     textAlign: 'left',
                     fontSize: 13,
                     fontWeight: 600,
-                    padding: '6px 8px',
+                    padding: '9px 14px 9px 8px',
                     whiteSpace: 'nowrap',
                     position: 'sticky',
                     left: 0,
@@ -1324,7 +1351,7 @@ function MetricTable({ yearData, rows, updateMetric, accent = C.blue }) {
                       textAlign: 'right',
                       fontSize: 13,
                       fontWeight: 600,
-                      padding: '6px 5px',
+                      padding: '9px 10px',
                     }}
                   >
                     {v == null ? DASH : fmtByUnit(v, row.unit)}
@@ -1335,7 +1362,7 @@ function MetricTable({ yearData, rows, updateMetric, accent = C.blue }) {
                     textAlign: 'right',
                     fontSize: 13,
                     fontWeight: 700,
-                    padding: '6px 6px',
+                    padding: '9px 12px',
                     borderLeft: `1px solid ${C.border}`,
                   }}
                 >
