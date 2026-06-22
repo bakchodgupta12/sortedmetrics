@@ -96,6 +96,24 @@ const C = {
   muted: '#9e9890',
 };
 
+// Translucent tint from a hex accent — used to gently colour computed rows.
+function hexToRgba(hex, alpha) {
+  const h = hex.replace('#', '');
+  const r = parseInt(h.slice(0, 2), 16);
+  const g = parseInt(h.slice(2, 4), 16);
+  const b = parseInt(h.slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+// Opaque version of the accent tint, blended over the white card background.
+// Used for the sticky first column so scrolled cells never show through it.
+function tintOnWhite(hex, alpha) {
+  const h = hex.replace('#', '');
+  const mix = (i) =>
+    Math.round(parseInt(h.slice(i, i + 2), 16) * alpha + 255 * (1 - alpha));
+  return `rgb(${mix(0)}, ${mix(2)}, ${mix(4)})`;
+}
+
 function Card({ accent, style, children }) {
   return (
     <div
@@ -115,12 +133,11 @@ function Card({ accent, style, children }) {
 
 const TABS = [
   'Dashboard',
-  'Downloads',
-  'Users',
+  'Downloads & Users',
+  'Retention',
   'Transactions',
-  'Cards',
-  'Revenue',
-  'Settings',
+  'Top-up Cards',
+  'Costs & Revenue',
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -695,6 +712,8 @@ function Dashboard({ user, setUser, onLogout }) {
         saveStatus={saveStatus}
         onRefresh={refresh}
         onLogout={onLogout}
+        onOpenSettings={() => setActiveTab('Settings')}
+        settingsActive={activeTab === 'Settings'}
       />
       <TabBar activeTab={activeTab} onChange={setActiveTab} />
 
@@ -744,6 +763,8 @@ function TopNav({
   saveStatus,
   onRefresh,
   onLogout,
+  onOpenSettings,
+  settingsActive,
 }) {
   const addNewYear = () => {
     const input = window.prompt('Add year (e.g. 2027):');
@@ -795,10 +816,14 @@ function TopNav({
             else onYearChange(Number(e.target.value));
           }}
           style={{
-            padding: '6px 10px',
+            width: 'auto',
+            appearance: 'none',
+            WebkitAppearance: 'none',
+            MozAppearance: 'none',
+            padding: '6px 30px 6px 12px',
             borderRadius: 8,
             border: `1px solid ${C.border}`,
-            background: '#fff',
+            background: `#fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%239e9890' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 11px center`,
             fontFamily: 'inherit',
             fontSize: 14,
             fontWeight: 600,
@@ -849,6 +874,23 @@ function TopNav({
         <span style={{ fontSize: 13, color: C.text }}>
           {user.display_name || user.username}
         </span>
+        <button
+          onClick={onOpenSettings}
+          title="Settings"
+          aria-label="Settings"
+          style={{
+            border: `1px solid ${settingsActive ? C.blue : C.border}`,
+            background: settingsActive ? 'rgba(91,155,213,0.12)' : '#fff',
+            color: settingsActive ? C.blue : C.text,
+            borderRadius: 8,
+            width: 32,
+            height: 32,
+            fontSize: 16,
+            lineHeight: 1,
+          }}
+        >
+          ⚙
+        </button>
         <button
           onClick={onLogout}
           style={{
@@ -1038,7 +1080,8 @@ function Cell({ value, unit, onCommit }) {
     if (t === '') onCommit(null);
     else {
       const n = parseFloat(t);
-      onCommit(Number.isFinite(n) ? n : null);
+      // Reject anything non-finite or negative — these fields are counts/amounts.
+      onCommit(Number.isFinite(n) && n >= 0 ? n : null);
     }
   };
 
@@ -1051,7 +1094,11 @@ function Cell({ value, unit, onCommit }) {
         setFocused(true);
         setDraft(value == null ? '' : String(value));
       }}
-      onChange={(e) => setDraft(e.target.value)}
+      onChange={(e) =>
+        // Allow only digits, thousands separators and a single decimal point.
+        // Strips letters, symbols and minus signs as they're typed/pasted.
+        setDraft(e.target.value.replace(/[^0-9.,]/g, ''))
+      }
       onBlur={() => {
         commit();
         setFocused(false);
@@ -1076,9 +1123,17 @@ function Cell({ value, unit, onCommit }) {
 }
 
 function InfoTip({ text }) {
+  // A cursor-following tooltip rendered with position:fixed so it is never
+  // clipped by the table's horizontal scroll container (the reason the plain
+  // `title` tooltip felt broken — it was slow and sometimes hidden).
+  const [pos, setPos] = useState(null);
+  const track = (e) => setPos({ x: e.clientX, y: e.clientY });
+
   return (
     <span
-      title={text}
+      onMouseEnter={track}
+      onMouseMove={track}
+      onMouseLeave={() => setPos(null)}
       style={{
         display: 'inline-flex',
         alignItems: 'center',
@@ -1098,6 +1153,34 @@ function InfoTip({ text }) {
       }}
     >
       i
+      {pos && (
+        <span
+          style={{
+            position: 'fixed',
+            left: Math.min(pos.x + 14, window.innerWidth - 230),
+            top: pos.y + 16,
+            maxWidth: 220,
+            background: C.text,
+            color: '#fff',
+            fontSize: 11,
+            fontWeight: 400,
+            fontStyle: 'normal',
+            fontFamily: 'var(--font-body)',
+            letterSpacing: 0,
+            textTransform: 'none',
+            lineHeight: 1.4,
+            padding: '7px 9px',
+            borderRadius: 7,
+            textAlign: 'left',
+            whiteSpace: 'normal',
+            boxShadow: '0 6px 18px rgba(0,0,0,0.22)',
+            pointerEvents: 'none',
+            zIndex: 1000,
+          }}
+        >
+          {text}
+        </span>
+      )}
     </span>
   );
 }
@@ -1116,8 +1199,10 @@ const thBase = {
   whiteSpace: 'nowrap',
 };
 
-function MetricTable({ yearData, rows, updateMetric }) {
+function MetricTable({ yearData, rows, updateMetric, accent = C.blue }) {
   const latest = latestMonthIndex(yearData);
+  const calcBg = hexToRgba(accent, 0.1);
+  const calcLabelBg = tintOnWhite(accent, 0.16);
 
   const inputYtd = (key, mode) => {
     if (latest < 0 || mode === 'none') return null;
@@ -1216,7 +1301,7 @@ function MetricTable({ yearData, rows, updateMetric }) {
 
             // calc row
             return (
-              <tr key={`c${ri}`} style={{ background: 'rgba(232,228,220,0.4)' }}>
+              <tr key={`c${ri}`} style={{ background: calcBg }}>
                 <td
                   style={{
                     textAlign: 'left',
@@ -1226,7 +1311,7 @@ function MetricTable({ yearData, rows, updateMetric }) {
                     whiteSpace: 'nowrap',
                     position: 'sticky',
                     left: 0,
-                    background: '#f3f1ea',
+                    background: calcLabelBg,
                   }}
                 >
                   {row.label}
@@ -1392,11 +1477,12 @@ function DownloadsTab({ yearData, updateMetric }) {
       valueAt(cumDownloads, latest),
       'Running total of new downloads from January.'
     ),
+    { kind: 'input', key: 'u_newUsers', label: 'New Users', unit: 'count' },
+    calc('User Conversion Rate', 'percent', conversion, pct(nuY, ndY), 'New users ÷ new downloads.'),
     { kind: 'subhead', label: 'Acquisition' },
     { kind: 'input', key: 'dl_ambassadorCosts', label: 'Ambassador Costs', unit: 'usd' },
     { kind: 'input', key: 'dl_paidCampaignSpend', label: 'Paid Campaign Spend', unit: 'usd' },
     calc('Total Marketing Spend', 'usd', totalMarketing, tmY, 'Ambassador costs + paid campaign spend.'),
-    calc('Download → User Conversion', 'percent', conversion, pct(nuY, ndY), 'New users ÷ new downloads.'),
     calc('Cost Per New Download', 'ratio', cpnd, safeDiv(tmY, ndY), 'Total marketing spend ÷ new downloads.'),
     calc('Cost Per New User', 'ratio', cpnu, safeDiv(tmY, nuY), 'Total marketing spend ÷ new users.'),
   ];
@@ -1408,8 +1494,8 @@ function DownloadsTab({ yearData, updateMetric }) {
   return (
     <div style={{ display: 'grid', gap: 16 }}>
       <Card accent={C.blue}>
-        <TabTitle title="Downloads" accent={C.blue} />
-        <MetricTable yearData={yearData} rows={rows} updateMetric={updateMetric} />
+        <TabTitle title="Downloads & Users" accent={C.blue} />
+        <MetricTable yearData={yearData} rows={rows} updateMetric={updateMetric} accent={C.blue} />
       </Card>
       <ChartCard title="Downloads by store" accent={C.blue}>
         <LineChart data={storeData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
@@ -1453,12 +1539,11 @@ function UsersTab({ yearData, updateMetric }) {
   const chY = seriesSum(churned, latest);
 
   const rows = [
-    { kind: 'input', key: 'u_newUsers', label: 'New Users', unit: 'count' },
     { kind: 'input', key: 'u_mau', label: 'MAU', unit: 'count', ytd: 'last' },
     { kind: 'input', key: 'u_dau', label: 'DAU', unit: 'count', ytd: 'last' },
     { kind: 'input', key: 'u_churned', label: 'Churned Users', unit: 'count' },
     calc('DAU / MAU', 'percent', dauMau, pct(valueAt(dau, latest), valueAt(mau, latest)), 'DAU ÷ MAU (latest month for YTD).'),
-    calc('Net User Growth', 'count', netGrowth, nuY == null && chY == null ? null : (nuY || 0) - (chY || 0), 'New users − churned users.'),
+    calc('Net User Growth', 'count', netGrowth, nuY == null && chY == null ? null : (nuY || 0) - (chY || 0), 'New users (from Downloads & Users) − churned users.'),
     calc('Cumulative Total Users', 'count', cumUsers, valueAt(cumUsers, latest), 'Running total of new users from January.'),
   ];
 
@@ -1467,8 +1552,8 @@ function UsersTab({ yearData, updateMetric }) {
   return (
     <div style={{ display: 'grid', gap: 16 }}>
       <Card accent={C.green}>
-        <TabTitle title="Users" accent={C.green} />
-        <MetricTable yearData={yearData} rows={rows} updateMetric={updateMetric} />
+        <TabTitle title="Retention" accent={C.green} />
+        <MetricTable yearData={yearData} rows={rows} updateMetric={updateMetric} accent={C.green} />
       </Card>
       <ChartCard title="MAU vs new users (with cumulative users)" accent={C.green}>
         <ComposedChart data={data} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
@@ -1540,7 +1625,7 @@ function TransactionsTab({ yearData, updateMetric }) {
     <div style={{ display: 'grid', gap: 16 }}>
       <Card accent={C.amber}>
         <TabTitle title="Transactions" accent={C.amber} />
-        <MetricTable yearData={yearData} rows={rows} updateMetric={updateMetric} />
+        <MetricTable yearData={yearData} rows={rows} updateMetric={updateMetric} accent={C.amber} />
       </Card>
       <ChartCard title="Transaction volume (USDT) & off-ramp success rate" accent={C.amber}>
         <ComposedChart data={volData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
@@ -1607,8 +1692,8 @@ function CardsTab({ yearData, updateMetric }) {
   return (
     <div style={{ display: 'grid', gap: 16 }}>
       <Card accent={C.purple}>
-        <TabTitle title="Cards" accent={C.purple} />
-        <MetricTable yearData={yearData} rows={rows} updateMetric={updateMetric} />
+        <TabTitle title="Top-up Cards" accent={C.purple} />
+        <MetricTable yearData={yearData} rows={rows} updateMetric={updateMetric} accent={C.purple} />
       </Card>
       <TwoCol>
         <ChartCard title="Cards sold vs redeemed" accent={C.purple}>
@@ -1699,8 +1784,8 @@ function RevenueTab({ yearData, updateMetric }) {
   return (
     <div style={{ display: 'grid', gap: 16 }}>
       <Card accent={C.green}>
-        <TabTitle title="Revenue" accent={C.green} />
-        <MetricTable yearData={yearData} rows={rows} updateMetric={updateMetric} />
+        <TabTitle title="Costs & Revenue" accent={C.green} />
+        <MetricTable yearData={yearData} rows={rows} updateMetric={updateMetric} accent={C.green} />
       </Card>
       <TwoCol>
         <ChartCard title="Revenue vs costs (with net)" accent={C.green}>
@@ -1980,15 +2065,15 @@ function TabContent({
 }) {
   const common = { yearData, activeYear, updateMetric, updateNote };
   switch (tab) {
-    case 'Downloads':
+    case 'Downloads & Users':
       return <DownloadsTab {...common} />;
-    case 'Users':
+    case 'Retention':
       return <UsersTab {...common} />;
     case 'Transactions':
       return <TransactionsTab {...common} />;
-    case 'Cards':
+    case 'Top-up Cards':
       return <CardsTab {...common} />;
-    case 'Revenue':
+    case 'Costs & Revenue':
       return <RevenueTab {...common} />;
     case 'Settings':
       return (
