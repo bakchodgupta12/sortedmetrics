@@ -1169,7 +1169,7 @@ function InfoTip({ text }) {
         color: hovered ? C.primary : C.muted,
         fontSize: 9,
         marginLeft: 5,
-        cursor: 'help',
+        cursor: 'default',
         verticalAlign: 'middle',
         fontFamily: 'var(--font-head)',
         fontStyle: 'italic',
