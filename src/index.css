@@ -1,25 +1,41 @@
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&display=swap');
 
 /* ── Design tokens ─────────────────────────────────────────── */
 :root {
-  --bg: #f7f5f0;
+  --bg: #f7f5f0; /* keep the warm cream dashboard backdrop */
   --card: #ffffff;
-  --border: #e8e4dc;
   --radius: 14px;
 
+  /* Brand gray scale */
+  --gray-900: #212121;
+  --gray-800: #424448;
+  --gray-700: #5c5d65;
+  --gray-600: #7b7d84;
+  --gray-500: #9da0aa;
+  --gray-400: #bcbfca;
+  --gray-300: #dfe3ed;
+  --gray-200: #eff2f7;
+  --gray-100: #f7f9fc;
+
+  --border: var(--gray-300);
+
+  /* Brand primary + functional colours */
+  --primary: #0011a8;
+  --primary-dark: #000077;
+  --red: #ff0044;
+
+  /* Functional chart-series colours (carry meaning, kept distinct) */
   --green: #6dbb8a;
-  --red: #d96b6b;
   --amber: #e8a838;
   --blue: #5b9bd5;
-  --blue-light: #7eb5d6;
   --purple: #9b8ec4;
 
-  --text: #2c2a26;
-  --muted: #9e9890;
+  --text: var(--gray-900);
+  --muted: var(--gray-600);
 
-  --font-body: 'DM Sans', system-ui, -apple-system, sans-serif;
-  /* Headings share the body face — hierarchy comes from weight & size only. */
-  --font-head: 'DM Sans', system-ui, -apple-system, sans-serif;
+  /* Outfit is the official brand face — used everywhere. */
+  --font-body: 'Outfit', system-ui, -apple-system, sans-serif;
+  --font-head: 'Outfit', system-ui, -apple-system, sans-serif;
 }
 
 /* ── Reset ─────────────────────────────────────────────────── */
@@ -39,7 +55,8 @@ body {
   color: var(--text);
   font-family: var(--font-body);
   font-size: 14px;
-  line-height: 1.5;
+  line-height: 1.4; /* 140% per brand guide */
+  letter-spacing: 0;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }

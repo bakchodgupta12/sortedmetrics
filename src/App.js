@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Area,
   AreaChart,
@@ -83,36 +84,36 @@ export function safeDiv(numerator, denominator) {
 // Shared styles
 // ─────────────────────────────────────────────────────────────────────────────
 const C = {
-  bg: '#f7f5f0',
+  bg: '#f7f5f0', // keep the warm cream dashboard backdrop
   card: '#fff',
-  border: '#e8e4dc',
+
+  // Brand gray scale
+  gray900: '#212121',
+  gray800: '#424448',
+  gray700: '#5c5d65',
+  gray600: '#7b7d84',
+  gray500: '#9da0aa',
+  gray400: '#bcbfca',
+  gray300: '#dfe3ed',
+  gray200: '#eff2f7',
+  gray100: '#f7f9fc',
+
+  border: '#dfe3ed', // gray-300
+  text: '#212121', // gray-900
+  muted: '#7b7d84', // gray-600
+
+  // Brand primary (UI chrome + primary actions) and accent red (alerts only)
+  primary: '#0011a8',
+  primaryDark: '#000077',
+  red: '#ff0044',
+
+  // Functional chart-series colours — distinct, carry meaning
   green: '#6dbb8a',
-  red: '#d96b6b',
   amber: '#e8a838',
   blue: '#5b9bd5',
   blueLight: '#7eb5d6',
   purple: '#9b8ec4',
-  text: '#2c2a26',
-  muted: '#9e9890',
 };
-
-// Translucent tint from a hex accent — used to gently colour computed rows.
-function hexToRgba(hex, alpha) {
-  const h = hex.replace('#', '');
-  const r = parseInt(h.slice(0, 2), 16);
-  const g = parseInt(h.slice(2, 4), 16);
-  const b = parseInt(h.slice(4, 6), 16);
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-}
-
-// Opaque version of the accent tint, blended over the white card background.
-// Used for the sticky first column so scrolled cells never show through it.
-function tintOnWhite(hex, alpha) {
-  const h = hex.replace('#', '');
-  const mix = (i) =>
-    Math.round(parseInt(h.slice(i, i + 2), 16) * alpha + 255 * (1 - alpha));
-  return `rgb(${mix(0)}, ${mix(2)}, ${mix(4)})`;
-}
 
 function Card({ accent, style, children }) {
   return (
@@ -159,7 +160,7 @@ const authBtn = (disabled) => ({
   padding: '11px 12px',
   border: 'none',
   borderRadius: 8,
-  background: disabled ? '#c9cfd6' : C.blue,
+  background: disabled ? C.gray400 : C.primary,
   color: '#fff',
   fontWeight: 600,
   fontSize: 14,
@@ -318,16 +319,13 @@ function AuthScreen({ onLogin }) {
       }}
     >
       <div style={{ width: '100%', maxWidth: 380 }}>
-        <h1
-          style={{
-            fontFamily: 'var(--font-head)',
-            fontSize: 26,
-            textAlign: 'center',
-            marginBottom: 4,
-          }}
-        >
-          Sorted Wallet Metrics
-        </h1>
+        <div style={{ textAlign: 'center', marginBottom: 6 }}>
+          <img
+            src={`${process.env.PUBLIC_URL}/sorted-wordmark.svg`}
+            alt="Sorted"
+            style={{ height: 34, width: 'auto' }}
+          />
+        </div>
         <p
           style={{
             textAlign: 'center',
@@ -336,10 +334,10 @@ function AuthScreen({ onLogin }) {
             marginBottom: 20,
           }}
         >
-          Internal KPI dashboard
+          Wallet Metrics · Internal KPI dashboard
         </p>
 
-        <Card accent={C.blue}>
+        <Card accent={C.primary}>
           {!isConfigured && (
             <p style={{ color: C.red, fontSize: 13 }}>
               Supabase is not configured. Add your keys to <code>.env</code> and
@@ -509,7 +507,7 @@ function AuthScreen({ onLogin }) {
 const linkBtn = {
   background: 'none',
   border: 'none',
-  color: C.blue,
+  color: C.primary,
   fontSize: 13,
   cursor: 'pointer',
   fontFamily: 'inherit',
@@ -798,14 +796,15 @@ function TopNav({
           gap: 16,
         }}
       >
-        <div
-          style={{
-            fontFamily: 'var(--font-head)',
-            fontSize: 18,
-            fontWeight: 600,
-          }}
-        >
-          Sorted Wallet Metrics
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <img
+            src={`${process.env.PUBLIC_URL}/sorted-wordmark.svg`}
+            alt="Sorted"
+            style={{ height: 22, width: 'auto' }}
+          />
+          <span style={{ fontSize: 14, fontWeight: 500, color: C.muted }}>
+            Wallet Metrics
+          </span>
         </div>
         <div style={{ flex: 1 }} />
 
@@ -823,7 +822,7 @@ function TopNav({
             padding: '6px 30px 6px 12px',
             borderRadius: 8,
             border: `1px solid ${C.border}`,
-            background: `#fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%239e9890' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 11px center`,
+            background: `#fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%237b7d84' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 11px center`,
             fontFamily: 'inherit',
             fontSize: 14,
             fontWeight: 600,
@@ -879,9 +878,9 @@ function TopNav({
           title="Settings"
           aria-label="Settings"
           style={{
-            border: `1px solid ${settingsActive ? C.blue : C.border}`,
-            background: settingsActive ? 'rgba(91,155,213,0.12)' : '#fff',
-            color: settingsActive ? C.blue : C.text,
+            border: `1px solid ${settingsActive ? C.primary : C.border}`,
+            background: settingsActive ? 'rgba(0,17,168,0.10)' : '#fff',
+            color: settingsActive ? C.primary : C.text,
             borderRadius: 8,
             width: 32,
             height: 32,
@@ -942,9 +941,9 @@ function TabBar({ activeTab, onChange }) {
                 padding: '12px 12px',
                 fontSize: 14,
                 fontWeight: active ? 700 : 500,
-                color: active ? C.text : C.muted,
+                color: active ? C.primary : C.muted,
                 borderBottom: active
-                  ? `2px solid ${C.text}`
+                  ? `2px solid ${C.primary}`
                   : '2px solid transparent',
                 marginBottom: -1,
                 whiteSpace: 'nowrap',
@@ -1114,7 +1113,7 @@ function Cell({ value, unit, onCommit }) {
         color: C.text,
         background: 'transparent',
         border: 'none',
-        borderBottom: `1px solid ${focused ? C.blueLight : 'transparent'}`,
+        borderBottom: `1px solid ${focused ? C.primary : 'transparent'}`,
         padding: '6px 4px',
         outline: 'none',
       }}
@@ -1123,11 +1122,11 @@ function Cell({ value, unit, onCommit }) {
 }
 
 function InfoTip({ text }) {
-  // A cursor-following tooltip rendered with position:fixed so it is never
-  // clipped by the table's horizontal scroll container (the reason the plain
-  // `title` tooltip felt broken — it was slow and sometimes hidden).
+  // A cursor-following tooltip. It's rendered through a portal onto <body> so
+  // it can never be clipped or stacked behind the sticky header / table cells.
   const [pos, setPos] = useState(null);
   const track = (e) => setPos({ x: e.clientX, y: e.clientY });
+  const hovered = pos != null;
 
   return (
     <span
@@ -1141,8 +1140,8 @@ function InfoTip({ text }) {
         width: 14,
         height: 14,
         borderRadius: '50%',
-        border: `1px solid ${C.muted}`,
-        color: C.muted,
+        border: `1px solid ${hovered ? C.primary : C.muted}`,
+        color: hovered ? C.primary : C.muted,
         fontSize: 9,
         marginLeft: 5,
         cursor: 'help',
@@ -1153,34 +1152,36 @@ function InfoTip({ text }) {
       }}
     >
       i
-      {pos && (
-        <span
-          style={{
-            position: 'fixed',
-            left: Math.min(pos.x + 14, window.innerWidth - 230),
-            top: pos.y + 16,
-            maxWidth: 220,
-            background: C.text,
-            color: '#fff',
-            fontSize: 11,
-            fontWeight: 400,
-            fontStyle: 'normal',
-            fontFamily: 'var(--font-body)',
-            letterSpacing: 0,
-            textTransform: 'none',
-            lineHeight: 1.4,
-            padding: '7px 9px',
-            borderRadius: 7,
-            textAlign: 'left',
-            whiteSpace: 'normal',
-            boxShadow: '0 6px 18px rgba(0,0,0,0.22)',
-            pointerEvents: 'none',
-            zIndex: 1000,
-          }}
-        >
-          {text}
-        </span>
-      )}
+      {hovered &&
+        createPortal(
+          <span
+            style={{
+              position: 'fixed',
+              left: Math.min(pos.x + 14, window.innerWidth - 230),
+              top: pos.y + 16,
+              maxWidth: 220,
+              background: C.gray900,
+              color: '#fff',
+              fontSize: 11,
+              fontWeight: 400,
+              fontStyle: 'normal',
+              fontFamily: 'var(--font-body)',
+              letterSpacing: 0,
+              textTransform: 'none',
+              lineHeight: 1.4,
+              padding: '7px 9px',
+              borderRadius: 7,
+              textAlign: 'left',
+              whiteSpace: 'normal',
+              boxShadow: '0 6px 18px rgba(0,0,0,0.22)',
+              pointerEvents: 'none',
+              zIndex: 2147483647,
+            }}
+          >
+            {text}
+          </span>,
+          document.body
+        )}
     </span>
   );
 }
@@ -1211,10 +1212,11 @@ function DividerRow() {
   );
 }
 
-function MetricTable({ yearData, rows, updateMetric, accent = C.blue }) {
+function MetricTable({ yearData, rows, updateMetric }) {
   const latest = latestMonthIndex(yearData);
-  const calcBg = hexToRgba(accent, 0.1);
-  const calcLabelBg = tintOnWhite(accent, 0.16);
+  // Calculated rows get a subtle brand-gray tint (not an accent fill).
+  const calcBg = C.gray200;
+  const calcLabelBg = C.gray200;
 
   const inputYtd = (key, mode) => {
     if (latest < 0 || mode === 'none') return null;
@@ -1224,19 +1226,19 @@ function MetricTable({ yearData, rows, updateMetric, accent = C.blue }) {
   };
 
   return (
-    <div style={{ overflowX: 'auto' }}>
-      <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 1060 }}>
+    <div style={{ overflowX: 'auto', padding: '0 2px' }}>
+      <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 920 }}>
         <thead>
           <tr style={{ borderBottom: `1px solid ${C.border}` }}>
             <th
               style={{
                 ...thBase,
                 textAlign: 'left',
-                paddingLeft: 8,
+                padding: '10px 16px',
+                width: '1%', // shrink to content so numeric cols share the rest
                 position: 'sticky',
                 left: 0,
                 background: C.card,
-                minWidth: 190,
               }}
             />
             {MONTHS.map((m) => (
@@ -1244,7 +1246,13 @@ function MetricTable({ yearData, rows, updateMetric, accent = C.blue }) {
                 {m}
               </th>
             ))}
-            <th style={{ ...thBase, borderLeft: `1px solid ${C.border}` }}>
+            <th
+              style={{
+                ...thBase,
+                paddingRight: 16,
+                borderLeft: `1px solid ${C.border}`,
+              }}
+            >
               YTD
             </th>
           </tr>
@@ -1292,7 +1300,7 @@ function MetricTable({ yearData, rows, updateMetric, accent = C.blue }) {
                       style={{
                         textAlign: 'left',
                         fontSize: 13,
-                        padding: '7px 14px 7px 8px',
+                        padding: '7px 16px',
                         whiteSpace: 'nowrap',
                         position: 'sticky',
                         left: 0,
@@ -1314,7 +1322,7 @@ function MetricTable({ yearData, rows, updateMetric, accent = C.blue }) {
                       style={{
                         textAlign: 'right',
                         fontSize: 13,
-                        padding: '7px 12px',
+                        padding: '7px 16px',
                         borderLeft: `1px solid ${C.border}`,
                         color: C.muted,
                       }}
@@ -1334,7 +1342,7 @@ function MetricTable({ yearData, rows, updateMetric, accent = C.blue }) {
                     textAlign: 'left',
                     fontSize: 13,
                     fontWeight: 600,
-                    padding: '9px 14px 9px 8px',
+                    padding: '9px 16px',
                     whiteSpace: 'nowrap',
                     position: 'sticky',
                     left: 0,
@@ -1362,7 +1370,7 @@ function MetricTable({ yearData, rows, updateMetric, accent = C.blue }) {
                     textAlign: 'right',
                     fontSize: 13,
                     fontWeight: 700,
-                    padding: '9px 12px',
+                    padding: '9px 16px',
                     borderLeft: `1px solid ${C.border}`,
                   }}
                 >
@@ -1400,9 +1408,9 @@ const yAxis = (extra = {}) => ({
   ...extra,
 });
 
-function ChartCard({ title, accent, height = 240, children }) {
+function ChartCard({ title, height = 240, children }) {
   return (
-    <Card accent={accent} style={{ paddingBottom: 12 }}>
+    <Card accent={C.primary} style={{ paddingBottom: 12 }}>
       <h3 style={{ fontSize: 15, marginBottom: 14 }}>{title}</h3>
       <ResponsiveContainer width="100%" height={height}>
         {children}
@@ -1520,9 +1528,9 @@ function DownloadsTab({ yearData, updateMetric }) {
 
   return (
     <div style={{ display: 'grid', gap: 16 }}>
-      <Card accent={C.blue}>
+      <Card accent={C.primary}>
         <TabTitle title="Downloads & Users" accent={C.blue} />
-        <MetricTable yearData={yearData} rows={rows} updateMetric={updateMetric} accent={C.blue} />
+        <MetricTable yearData={yearData} rows={rows} updateMetric={updateMetric} />
       </Card>
       <ChartCard title="Downloads by store" accent={C.blue}>
         <LineChart data={storeData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
@@ -1578,9 +1586,9 @@ function UsersTab({ yearData, updateMetric }) {
 
   return (
     <div style={{ display: 'grid', gap: 16 }}>
-      <Card accent={C.green}>
+      <Card accent={C.primary}>
         <TabTitle title="Retention" accent={C.green} />
-        <MetricTable yearData={yearData} rows={rows} updateMetric={updateMetric} accent={C.green} />
+        <MetricTable yearData={yearData} rows={rows} updateMetric={updateMetric} />
       </Card>
       <ChartCard title="MAU vs new users (with cumulative users)" accent={C.green}>
         <ComposedChart data={data} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
@@ -1650,9 +1658,9 @@ function TransactionsTab({ yearData, updateMetric }) {
 
   return (
     <div style={{ display: 'grid', gap: 16 }}>
-      <Card accent={C.amber}>
+      <Card accent={C.primary}>
         <TabTitle title="Transactions" accent={C.amber} />
-        <MetricTable yearData={yearData} rows={rows} updateMetric={updateMetric} accent={C.amber} />
+        <MetricTable yearData={yearData} rows={rows} updateMetric={updateMetric} />
       </Card>
       <ChartCard title="Transaction volume (USDT) & off-ramp success rate" accent={C.amber}>
         <ComposedChart data={volData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
@@ -1718,9 +1726,9 @@ function CardsTab({ yearData, updateMetric }) {
 
   return (
     <div style={{ display: 'grid', gap: 16 }}>
-      <Card accent={C.purple}>
+      <Card accent={C.primary}>
         <TabTitle title="Top-up Cards" accent={C.purple} />
-        <MetricTable yearData={yearData} rows={rows} updateMetric={updateMetric} accent={C.purple} />
+        <MetricTable yearData={yearData} rows={rows} updateMetric={updateMetric} />
       </Card>
       <TwoCol>
         <ChartCard title="Cards sold vs redeemed" accent={C.purple}>
@@ -1810,9 +1818,9 @@ function RevenueTab({ yearData, updateMetric }) {
 
   return (
     <div style={{ display: 'grid', gap: 16 }}>
-      <Card accent={C.green}>
+      <Card accent={C.primary}>
         <TabTitle title="Costs & Revenue" accent={C.green} />
-        <MetricTable yearData={yearData} rows={rows} updateMetric={updateMetric} accent={C.green} />
+        <MetricTable yearData={yearData} rows={rows} updateMetric={updateMetric} />
       </Card>
       <TwoCol>
         <ChartCard title="Revenue vs costs (with net)" accent={C.green}>
@@ -1890,9 +1898,9 @@ function TabTitle({ title, accent, downloadLabel }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Dashboard tab
 // ─────────────────────────────────────────────────────────────────────────────
-function KpiCard({ label, value, accent }) {
+function KpiCard({ label, value }) {
   return (
-    <Card accent={accent} style={{ padding: 16 }}>
+    <Card accent={C.primary} style={{ padding: 16 }}>
       <div
         style={{
           fontSize: 10,
@@ -1944,7 +1952,7 @@ function NoteCell({ value, onCommit }) {
         color: C.text,
         background: 'transparent',
         border: 'none',
-        borderBottom: `1px solid ${focused ? C.blueLight : 'transparent'}`,
+        borderBottom: `1px solid ${focused ? C.primary : 'transparent'}`,
         padding: '6px 2px',
         outline: 'none',
       }}
@@ -2047,7 +2055,7 @@ function DashboardTab({ yearData, activeYear, updateNote }) {
         </AreaChart>
       </ChartCard>
 
-      <Card accent={C.blue}>
+      <Card accent={C.primary}>
         <h3 style={{ fontSize: 15, marginBottom: 8 }}>Notes</h3>
         <table style={{ borderCollapse: 'collapse', width: '100%' }}>
           <tbody>
@@ -2208,7 +2216,7 @@ function SettingsTab({ user, setUser, activeYear, years, onDeleteYear, onLogout 
   const settingInput = { ...authInput, maxWidth: 320 };
   const smallBtn = {
     border: 'none',
-    background: C.blue,
+    background: C.primary,
     color: '#fff',
     borderRadius: 8,
     padding: '8px 14px',
@@ -2219,7 +2227,7 @@ function SettingsTab({ user, setUser, activeYear, years, onDeleteYear, onLogout 
 
   return (
     <div style={{ display: 'grid', gap: 16, maxWidth: 560 }}>
-      <Card accent={C.blue}>
+      <Card accent={C.primary}>
         <div style={sectionLabel}>Profile</div>
         <h2 style={{ fontSize: 18, margin: '4px 0 12px' }}>Display name</h2>
         <input
@@ -2238,7 +2246,7 @@ function SettingsTab({ user, setUser, activeYear, years, onDeleteYear, onLogout 
         {msg && <p style={{ color: C.green, fontSize: 13 }}>{msg}</p>}
       </Card>
 
-      <Card accent={C.blue}>
+      <Card accent={C.primary}>
         <div style={sectionLabel}>Security</div>
         <h2 style={{ fontSize: 18, margin: '4px 0 12px' }}>Change password</h2>
         <input
@@ -2282,7 +2290,7 @@ function SettingsTab({ user, setUser, activeYear, years, onDeleteYear, onLogout 
         </div>
       </Card>
 
-      <Card accent={C.amber}>
+      <Card accent={C.primary}>
         <div style={sectionLabel}>Data</div>
         <h2 style={{ fontSize: 18, margin: '4px 0 12px' }}>Delete year</h2>
         <p style={{ fontSize: 13, color: C.muted, marginTop: 0 }}>
@@ -2314,7 +2322,7 @@ function SettingsTab({ user, setUser, activeYear, years, onDeleteYear, onLogout 
           <button
             style={{
               ...smallBtn,
-              background: confirmDelete === 'DELETE' ? C.red : '#c9cfd6',
+              background: confirmDelete === 'DELETE' ? C.red : C.gray400,
               cursor: confirmDelete === 'DELETE' ? 'pointer' : 'not-allowed',
             }}
             onClick={doDeleteAccount}

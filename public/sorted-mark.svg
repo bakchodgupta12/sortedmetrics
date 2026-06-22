@@ -1,0 +1,7 @@
+<!-- PLACEHOLDER Sorted logo mark, used as the favicon.
+     Replace this file with the official Sorted logo mark SVG — keep the same
+     filename and the app will pick it up automatically. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" role="img" aria-label="Sorted">
+  <rect width="64" height="64" rx="14" fill="#0011A8"/>
+  <text x="32" y="45" text-anchor="middle" font-family="Outfit, system-ui, -apple-system, sans-serif" font-size="40" font-weight="700" fill="#ffffff">s</text>
+</svg>

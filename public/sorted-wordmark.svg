@@ -1,0 +1,6 @@
+<!-- PLACEHOLDER Sorted wordmark (primary-blue, for light backgrounds).
+     Replace this file with the official Sorted wordmark SVG — keep the same
+     filename and the app will pick it up automatically. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="132" height="32" viewBox="0 0 132 32" role="img" aria-label="Sorted">
+  <text x="0" y="25" font-family="Outfit, 'DM Sans', system-ui, -apple-system, sans-serif" font-size="27" font-weight="700" letter-spacing="0" fill="#0011A8">sorted</text>
+</svg>
