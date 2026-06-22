@@ -4,7 +4,22 @@ Internal monthly KPI dashboard for the Sorted Wallet team. All metrics are
 entered manually at month end. Built with Create React App (plain JavaScript),
 Supabase for storage, and Recharts for charts. Deploys to Vercel.
 
-> Status: scaffold in progress. Features are being built tab by tab.
+> Status: core complete. Dashboard, Downloads, Users, Transactions, Cards,
+> Revenue, and Settings tabs are all built. Per-tab and "Download all" exports
+> are stubbed (disabled buttons) and wired for a later phase.
+
+## Features
+
+- Custom username + password auth (SHA-256 + per-user salt, hashed client-side),
+  first-login registration with a security question, and a forgot-password flow.
+- Seven tabs: Dashboard (8 KPI cards + trend charts + editable notes), and
+  Downloads / Users / Transactions / Cards / Revenue input tables with live
+  calculated rows (each with a hover "i" formula tooltip) and section charts.
+- Multi-year support: year dropdown (defaults to the current year), add a new
+  empty year, delete years from Settings.
+- Inline-editable cells with debounced (1.5s) auto-save to Supabase and a
+  top-right save status (Saving… / Saved / Save failed) plus refresh.
+- Calculated fields are never stored; zero denominators render "—".
 
 ## Stack
 

@@ -1408,7 +1408,7 @@ function DownloadsTab({ yearData, updateMetric }) {
   return (
     <div style={{ display: 'grid', gap: 16 }}>
       <Card accent={C.blue}>
-        <h2 style={{ fontSize: 18, marginBottom: 12 }}>Downloads</h2>
+        <TabTitle title="Downloads" accent={C.blue} />
         <MetricTable yearData={yearData} rows={rows} updateMetric={updateMetric} />
       </Card>
       <ChartCard title="Downloads by store" accent={C.blue}>
@@ -1467,7 +1467,7 @@ function UsersTab({ yearData, updateMetric }) {
   return (
     <div style={{ display: 'grid', gap: 16 }}>
       <Card accent={C.green}>
-        <h2 style={{ fontSize: 18, marginBottom: 12 }}>Users</h2>
+        <TabTitle title="Users" accent={C.green} />
         <MetricTable yearData={yearData} rows={rows} updateMetric={updateMetric} />
       </Card>
       <ChartCard title="MAU vs new users (with cumulative users)" accent={C.green}>
@@ -1539,7 +1539,7 @@ function TransactionsTab({ yearData, updateMetric }) {
   return (
     <div style={{ display: 'grid', gap: 16 }}>
       <Card accent={C.amber}>
-        <h2 style={{ fontSize: 18, marginBottom: 12 }}>Transactions</h2>
+        <TabTitle title="Transactions" accent={C.amber} />
         <MetricTable yearData={yearData} rows={rows} updateMetric={updateMetric} />
       </Card>
       <ChartCard title="Transaction volume (USDT) & off-ramp success rate" accent={C.amber}>
@@ -1607,7 +1607,7 @@ function CardsTab({ yearData, updateMetric }) {
   return (
     <div style={{ display: 'grid', gap: 16 }}>
       <Card accent={C.purple}>
-        <h2 style={{ fontSize: 18, marginBottom: 12 }}>Cards</h2>
+        <TabTitle title="Cards" accent={C.purple} />
         <MetricTable yearData={yearData} rows={rows} updateMetric={updateMetric} />
       </Card>
       <TwoCol>
@@ -1699,7 +1699,7 @@ function RevenueTab({ yearData, updateMetric }) {
   return (
     <div style={{ display: 'grid', gap: 16 }}>
       <Card accent={C.green}>
-        <h2 style={{ fontSize: 18, marginBottom: 12 }}>Revenue</h2>
+        <TabTitle title="Revenue" accent={C.green} />
         <MetricTable yearData={yearData} rows={rows} updateMetric={updateMetric} />
       </Card>
       <TwoCol>
@@ -1726,6 +1726,242 @@ function RevenueTab({ yearData, updateMetric }) {
           </AreaChart>
         </ChartCard>
       </TwoCol>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Export seam — the per-tab "Download" and "Download all" exports are planned
+// for a later phase. The button is rendered (disabled) so the placement and
+// data wiring are in place; hook up `onClick` when the feature is built.
+// ─────────────────────────────────────────────────────────────────────────────
+function DownloadButton({ label = 'Download' }) {
+  return (
+    <button
+      type="button"
+      disabled
+      title="Export — coming in a later phase"
+      style={{
+        border: `1px solid ${C.border}`,
+        background: '#fff',
+        borderRadius: 8,
+        padding: '6px 12px',
+        fontSize: 12,
+        fontWeight: 600,
+        color: C.muted,
+        cursor: 'not-allowed',
+        whiteSpace: 'nowrap',
+      }}
+    >
+      ↓ {label}
+    </button>
+  );
+}
+
+function TabTitle({ title, accent, downloadLabel }) {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 12,
+        marginBottom: 12,
+      }}
+    >
+      <h2 style={{ fontSize: 18 }}>{title}</h2>
+      <div style={{ flex: 1 }} />
+      <DownloadButton label={downloadLabel || 'Download'} />
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Dashboard tab
+// ─────────────────────────────────────────────────────────────────────────────
+function KpiCard({ label, value, accent }) {
+  return (
+    <Card accent={accent} style={{ padding: 16 }}>
+      <div
+        style={{
+          fontSize: 10,
+          fontWeight: 500,
+          letterSpacing: '0.08em',
+          textTransform: 'uppercase',
+          color: C.muted,
+        }}
+      >
+        {label}
+      </div>
+      <div
+        style={{
+          fontFamily: 'var(--font-head)',
+          fontSize: 26,
+          fontWeight: 600,
+          marginTop: 6,
+        }}
+      >
+        {value}
+      </div>
+    </Card>
+  );
+}
+
+function NoteCell({ value, onCommit }) {
+  const [focused, setFocused] = useState(false);
+  const [draft, setDraft] = useState(value || '');
+  return (
+    <input
+      value={focused ? draft : value || ''}
+      placeholder="—"
+      onFocus={() => {
+        setFocused(true);
+        setDraft(value || '');
+      }}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={() => {
+        onCommit(draft);
+        setFocused(false);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') e.currentTarget.blur();
+      }}
+      style={{
+        width: '100%',
+        fontFamily: 'inherit',
+        fontSize: 13,
+        color: C.text,
+        background: 'transparent',
+        border: 'none',
+        borderBottom: `1px solid ${focused ? C.blueLight : 'transparent'}`,
+        padding: '6px 2px',
+        outline: 'none',
+      }}
+    />
+  );
+}
+
+function DashboardTab({ yearData, activeYear, updateNote }) {
+  const latest = latestMonthIndex(yearData);
+  const storeKeys = STORE_KEYS.map((s) => s[0]);
+  const countKeys = ['tx_sendP2P', 'tx_receiveP2P', 'tx_cashOut', 'tx_airtime', 'tx_cardRedemption', 'tx_other'];
+  const valueKeys = ['tx_sendVolume', 'tx_cashOutVolume', 'tx_cardRedemptionVolume'];
+
+  const newDownloads = sumSeries(yearData, storeKeys);
+  const newUsers = rawSeries(yearData, 'u_newUsers');
+  const mau = rawSeries(yearData, 'u_mau');
+  const totalTx = sumSeries(yearData, countKeys);
+  const totalVol = sumSeries(yearData, valueKeys);
+
+  const kpis = [
+    { label: 'Total Downloads YTD', value: fmtNumber(seriesSum(newDownloads, latest)), accent: C.blue },
+    { label: 'New Users YTD', value: fmtNumber(seriesSum(newUsers, latest)), accent: C.green },
+    { label: 'MAU (latest month)', value: fmtNumber(valueAt(mau, latest)), accent: C.blue },
+    { label: 'Total Transactions YTD', value: fmtNumber(seriesSum(totalTx, latest)), accent: C.amber },
+    { label: 'Cards Sold YTD', value: fmtNumber(seriesSum(rawSeries(yearData, 'c_sold'), latest)), accent: C.purple },
+    { label: 'Cards Redeemed YTD', value: fmtNumber(seriesSum(rawSeries(yearData, 'c_redeemed'), latest)), accent: C.purple },
+    {
+      label: 'Download → User Conversion (latest)',
+      value: fmtPercent(pct(valueAt(newUsers, latest), valueAt(newDownloads, latest))),
+      accent: C.blue,
+    },
+    {
+      label: 'Avg Transaction Value USDT (latest)',
+      value: fmtUSDT(safeDiv(valueAt(totalVol, latest), valueAt(totalTx, latest))),
+      accent: C.amber,
+    },
+  ];
+
+  const downloadsData = monthChartData({ Downloads: newDownloads });
+  const mauData = monthChartData({ MAU: mau });
+  const volData = monthChartData({ Volume: totalVol });
+
+  return (
+    <div style={{ display: 'grid', gap: 16 }}>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 12,
+        }}
+      >
+        <h2 style={{ fontSize: 18 }}>Dashboard · {activeYear}</h2>
+        <div style={{ flex: 1 }} />
+        <DownloadButton label="Download all" />
+      </div>
+
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+          gap: 16,
+        }}
+      >
+        {kpis.map((k) => (
+          <KpiCard key={k.label} {...k} />
+        ))}
+      </div>
+
+      <TwoCol>
+        <ChartCard title="Monthly downloads" accent={C.green}>
+          <AreaChart data={downloadsData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+            {gradient('dashDownloads', C.green)}
+            <CartesianGrid {...GRID} />
+            <XAxis {...X_AXIS} />
+            <YAxis {...yAxis()} />
+            <Tooltip content={<ChartTooltip fmt={fmtNumber} />} />
+            <Area type="monotone" dataKey="Downloads" stroke={C.green} strokeWidth={2} fill="url(#dashDownloads)" connectNulls />
+          </AreaChart>
+        </ChartCard>
+        <ChartCard title="Monthly active users" accent={C.blue}>
+          <AreaChart data={mauData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+            {gradient('dashMau', C.blue)}
+            <CartesianGrid {...GRID} />
+            <XAxis {...X_AXIS} />
+            <YAxis {...yAxis()} />
+            <Tooltip content={<ChartTooltip fmt={fmtNumber} />} />
+            <Area type="monotone" dataKey="MAU" stroke={C.blue} strokeWidth={2} fill="url(#dashMau)" connectNulls />
+          </AreaChart>
+        </ChartCard>
+      </TwoCol>
+
+      <ChartCard title="Total transaction volume (USDT)" accent={C.amber} height={260}>
+        <AreaChart data={volData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+          {gradient('dashVol', C.amber)}
+          <CartesianGrid {...GRID} />
+          <XAxis {...X_AXIS} />
+          <YAxis {...yAxis()} />
+          <Tooltip content={<ChartTooltip fmt={fmtUSDT} />} />
+          <Area type="monotone" dataKey="Volume" stroke={C.amber} strokeWidth={2} fill="url(#dashVol)" connectNulls />
+        </AreaChart>
+      </ChartCard>
+
+      <Card accent={C.blue}>
+        <h3 style={{ fontSize: 15, marginBottom: 8 }}>Notes</h3>
+        <table style={{ borderCollapse: 'collapse', width: '100%' }}>
+          <tbody>
+            {MONTHS.map((m) => (
+              <tr key={m} style={{ borderBottom: `1px solid ${C.bg}` }}>
+                <td
+                  style={{
+                    ...thBase,
+                    textAlign: 'left',
+                    width: 56,
+                    paddingLeft: 4,
+                  }}
+                >
+                  {m}
+                </td>
+                <td style={{ padding: '0 4px' }}>
+                  <NoteCell
+                    value={yearData.notes?.[m]}
+                    onCommit={(text) => updateNote(m, text)}
+                  />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </Card>
     </div>
   );
 }
@@ -1768,12 +2004,11 @@ function TabContent({
     case 'Dashboard':
     default:
       return (
-        <Card accent={C.blue}>
-          <h2 style={{ fontSize: 20, marginBottom: 6 }}>Dashboard</h2>
-          <p style={{ color: C.muted, margin: 0 }}>
-            The Dashboard is built in the next phase. Viewing {activeYear}.
-          </p>
-        </Card>
+        <DashboardTab
+          yearData={yearData}
+          activeYear={activeYear}
+          updateNote={updateNote}
+        />
       );
   }
 }
