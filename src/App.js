@@ -1373,7 +1373,11 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD' }) {
                         color: C.muted,
                       }}
                     >
-                      {ytd == null ? DASH : fmtByUnit(ytd, row.unit)}
+                      {row.ytd === 'none'
+                        ? ''
+                        : ytd == null
+                        ? DASH
+                        : fmtByUnit(ytd, row.unit)}
                     </td>
                   </tr>
                 </React.Fragment>
@@ -1420,7 +1424,11 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD' }) {
                     borderLeft: `1px solid ${C.border}`,
                   }}
                 >
-                  {row.ytd == null ? DASH : fmtByUnit(row.ytd, row.unit)}
+                  {row.blankTotal
+                    ? ''
+                    : row.ytd == null
+                    ? DASH
+                    : fmtByUnit(row.ytd, row.unit)}
                 </td>
               </tr>
             );
@@ -1691,17 +1699,28 @@ function UsersTab({ yearData, updateMetric }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Transactions tab
 // ─────────────────────────────────────────────────────────────────────────────
-function TransactionsTab({ yearData, updateMetric }) {
+const TX_OTHER_INFO =
+  'All other in-app activity outside the core flows, such as airtime top-ups, bill and utility payments, and other Market features.';
+
+function TransactionsTab({ yearData, updateMetric, allYears, activeYear }) {
   const latest = latestMonthIndex(yearData);
-  const countKeys = ['tx_sendP2P', 'tx_receiveP2P', 'tx_cashOut', 'tx_airtime', 'tx_cardRedemption', 'tx_other'];
-  const valueKeys = ['tx_sendVolume', 'tx_cashOutVolume', 'tx_cardRedemptionVolume'];
+  // tx_airtime is retired (folds into Other); kept in the model for old data.
+  const countKeys = ['tx_sendP2P', 'tx_receiveP2P', 'tx_cashOut', 'tx_cardRedemption', 'tx_other'];
+  const valueKeys = ['tx_sendVolume', 'tx_cashOutVolume', 'tx_cardRedemptionVolume', 'tx_otherVolume'];
 
   const totalTx = sumSeries(yearData, countKeys);
   const totalVol = sumSeries(yearData, valueKeys);
-  const avgSize = ratioSeries(totalVol, totalTx);
+  const avgSize = ratioSeries(totalVol, totalTx); // monthly ATS
   const attempts = rawSeries(yearData, 'tx_offrampAttempts');
   const successful = rawSeries(yearData, 'tx_offrampSuccessful');
   const successRate = pctSeries(successful, attempts);
+
+  // Lifetime running totals carry across years (seed from all prior years).
+  const baseTx = priorYearsTotal(allYears, activeYear, countKeys);
+  const baseVol = priorYearsTotal(allYears, activeYear, valueKeys);
+  const lifeTx = cumulativeSeriesFrom(totalTx, baseTx);
+  const lifeVol = cumulativeSeriesFrom(totalVol, baseVol);
+  const lifeAvg = ratioSeries(lifeVol, lifeTx);
 
   const txY = seriesSum(totalTx, latest);
   const volY = seriesSum(totalVol, latest);
@@ -1709,20 +1728,32 @@ function TransactionsTab({ yearData, updateMetric }) {
   const sucY = seriesSum(successful, latest);
 
   const rows = [
-    { kind: 'subhead', label: 'Volume (counts)' },
+    { kind: 'subhead', label: 'Transaction Count' },
     { kind: 'input', key: 'tx_sendP2P', label: 'Send', unit: 'count' },
     { kind: 'input', key: 'tx_receiveP2P', label: 'Receive', unit: 'count' },
     { kind: 'input', key: 'tx_cashOut', label: 'Cash-Out', unit: 'count' },
-    { kind: 'input', key: 'tx_airtime', label: 'Airtime Top-Up', unit: 'count' },
     { kind: 'input', key: 'tx_cardRedemption', label: 'Top-up Cards', unit: 'count' },
-    { kind: 'input', key: 'tx_other', label: 'Other', unit: 'count' },
-    calc('Total Transactions', 'count', totalTx, txY, 'Sum of all transaction counts.'),
-    { kind: 'subhead', label: 'Value (USDT)' },
+    { kind: 'input', key: 'tx_other', label: 'Other', unit: 'count', info: TX_OTHER_INFO },
+    calc('Total Transactions', 'count', totalTx, txY, 'Sum of all transaction counts for the month.'),
+    {
+      ...calc('Lifetime Transactions', 'count', lifeTx, null, 'Cumulative transaction count since we began tracking.'),
+      blankTotal: true,
+    },
+    { kind: 'subhead', label: 'Transaction Volume (USDT)' },
     { kind: 'input', key: 'tx_sendVolume', label: 'Send & Receive', unit: 'usdt' },
     { kind: 'input', key: 'tx_cashOutVolume', label: 'Cash-Out', unit: 'usdt' },
     { kind: 'input', key: 'tx_cardRedemptionVolume', label: 'Top-up Cards', unit: 'usdt' },
-    calc('Total Volume', 'usdt', totalVol, volY, 'Sum of all value lines (USDT).'),
-    calc('Average Transaction Size', 'ratio', avgSize, safeDiv(volY, txY), 'Total volume ÷ total transactions.'),
+    { kind: 'input', key: 'tx_otherVolume', label: 'Other', unit: 'usdt', info: TX_OTHER_INFO },
+    calc('Total Volume', 'usdt', totalVol, volY, 'Sum of all transaction volume lines for the month (USDT).'),
+    calc('Average Transaction Size', 'ratio', avgSize, safeDiv(volY, txY), 'Total volume ÷ total transactions, for the month.'),
+    {
+      ...calc('Lifetime Volume', 'usdt', lifeVol, null, 'Cumulative USDT volume since we began tracking.'),
+      blankTotal: true,
+    },
+    {
+      ...calc('Lifetime Average Transaction Size', 'ratio', lifeAvg, null, 'All-time average transaction size (Lifetime Volume ÷ Lifetime Transactions).'),
+      blankTotal: true,
+    },
     { kind: 'subhead', label: 'Off-Ramp Health' },
     { kind: 'input', key: 'tx_offrampAttempts', label: 'Cash-Out Attempts', unit: 'count' },
     { kind: 'input', key: 'tx_offrampSuccessful', label: 'Successful Cash-Outs', unit: 'count' },
@@ -1733,6 +1764,7 @@ function TransactionsTab({ yearData, updateMetric }) {
     'Send & Receive': rawSeries(yearData, 'tx_sendVolume'),
     'Cash-Out': rawSeries(yearData, 'tx_cashOutVolume'),
     'Top-up Cards': rawSeries(yearData, 'tx_cardRedemptionVolume'),
+    Other: rawSeries(yearData, 'tx_otherVolume'),
     'Off-Ramp Rate': successRate,
   });
 
@@ -1752,7 +1784,8 @@ function TransactionsTab({ yearData, updateMetric }) {
           <Legend wrapperStyle={{ fontSize: 11 }} />
           <Bar yAxisId="left" dataKey="Send & Receive" stackId="v" fill={C.amber} barSize={20} />
           <Bar yAxisId="left" dataKey="Cash-Out" stackId="v" fill={C.blue} barSize={20} />
-          <Bar yAxisId="left" dataKey="Top-up Cards" stackId="v" fill={C.purple} barSize={20} radius={[4, 4, 0, 0]} />
+          <Bar yAxisId="left" dataKey="Top-up Cards" stackId="v" fill={C.purple} barSize={20} />
+          <Bar yAxisId="left" dataKey="Other" stackId="v" fill={C.gray400} barSize={20} radius={[4, 4, 0, 0]} />
           <Line yAxisId="right" type="monotone" dataKey="Off-Ramp Rate" stroke={C.green} strokeWidth={2} dot={false} connectNulls />
         </ComposedChart>
       </ChartCard>
@@ -2052,8 +2085,8 @@ function KpiCard({ label, value }) {
 function DashboardTab({ yearData, activeYear }) {
   const latest = latestMonthIndex(yearData);
   const storeKeys = STORE_KEYS.map((s) => s[0]);
-  const countKeys = ['tx_sendP2P', 'tx_receiveP2P', 'tx_cashOut', 'tx_airtime', 'tx_cardRedemption', 'tx_other'];
-  const valueKeys = ['tx_sendVolume', 'tx_cashOutVolume', 'tx_cardRedemptionVolume'];
+  const countKeys = ['tx_sendP2P', 'tx_receiveP2P', 'tx_cashOut', 'tx_cardRedemption', 'tx_other'];
+  const valueKeys = ['tx_sendVolume', 'tx_cashOutVolume', 'tx_cardRedemptionVolume', 'tx_otherVolume'];
 
   const newDownloads = sumSeries(yearData, storeKeys);
   const newUsers = rawSeries(yearData, 'u_newUsers');
@@ -2160,10 +2193,10 @@ function TabContent({
   onLogout,
   allYears,
 }) {
-  const common = { yearData, activeYear, updateMetric, updateNote };
+  const common = { yearData, activeYear, updateMetric, updateNote, allYears };
   switch (tab) {
     case 'Installs & Users':
-      return <DownloadsTab {...common} allYears={allYears} />;
+      return <DownloadsTab {...common} />;
     case 'Retention':
       return <UsersTab {...common} />;
     case 'Transactions':

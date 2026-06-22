@@ -153,6 +153,7 @@ export const METRIC_GROUPS = {
           label: 'Card Redemption Volume',
           unit: 'usdt',
         },
+        { key: 'tx_otherVolume', label: 'Other Volume', unit: 'usdt' },
       ],
     },
     {
