@@ -1,5 +1,24 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Area,
+  AreaChart,
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell as RCell,
+  ComposedChart,
+  Legend,
+  Line,
+  LineChart,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts';
+import {
+  MONTHS,
   SECURITY_QUESTIONS,
   changePassword,
   createUser,
@@ -603,6 +622,44 @@ function Dashboard({ user, setUser, onLogout }) {
     }
   }, [user.username, setUser]);
 
+  // Edit a single metric cell for the active year.
+  const updateMetric = useCallback(
+    (metricKey, month, value) => {
+      setData((prev) => {
+        const y = String(activeYear);
+        const year = prev.years[y] || emptyYear();
+        const metric = { ...(year[metricKey] || {}) };
+        if (value === null || value === undefined || Number.isNaN(value)) {
+          delete metric[month];
+        } else {
+          metric[month] = value;
+        }
+        return {
+          ...prev,
+          years: { ...prev.years, [y]: { ...year, [metricKey]: metric } },
+        };
+      });
+    },
+    [activeYear]
+  );
+
+  const updateNote = useCallback(
+    (month, text) => {
+      setData((prev) => {
+        const y = String(activeYear);
+        const year = prev.years[y] || emptyYear();
+        const notes = { ...(year.notes || {}) };
+        if (!text || !text.trim()) delete notes[month];
+        else notes[month] = text;
+        return {
+          ...prev,
+          years: { ...prev.years, [y]: { ...year, notes } },
+        };
+      });
+    },
+    [activeYear]
+  );
+
   // Year management
   const addYear = (year) => {
     setData((prev) => {
@@ -655,6 +712,8 @@ function Dashboard({ user, setUser, onLogout }) {
           years={years}
           user={user}
           setUser={setUser}
+          updateMetric={updateMetric}
+          updateNote={updateNote}
           onDeleteYear={deleteYear}
           onLogout={onLogout}
         />
@@ -858,7 +917,819 @@ function TabBar({ activeTab, onChange }) {
   );
 }
 
-// Placeholder tab content — each tab is built out in its own phase.
+// ─────────────────────────────────────────────────────────────────────────────
+// Calculation helpers (all live, never stored)
+// ─────────────────────────────────────────────────────────────────────────────
+const IDX = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+
+function getVal(yearData, key, i) {
+  const v = yearData?.[key]?.[MONTHS[i]];
+  return isNum(v) ? v : null;
+}
+
+function fmtByUnit(v, unit) {
+  switch (unit) {
+    case 'usdt':
+      return fmtUSDT(v);
+    case 'percent':
+      return fmtPercent(v);
+    case 'ratio':
+      if (!isNum(v)) return DASH;
+      return Math.abs(v) >= 1_000_000
+        ? compact(v)
+        : v.toLocaleString('en-US', {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2,
+          });
+    default:
+      return fmtNumber(v); // count, usd
+  }
+}
+
+// Latest month index (0-11) with any data in the year, else -1.
+function latestMonthIndex(yearData) {
+  let latest = -1;
+  for (let i = 0; i < 12; i++) {
+    for (const key of Object.keys(yearData || {})) {
+      if (key === 'notes') continue;
+      if (isNum(yearData[key]?.[MONTHS[i]])) {
+        latest = i;
+        break;
+      }
+    }
+  }
+  return latest;
+}
+
+function rawSeries(yearData, key) {
+  return IDX.map((i) => getVal(yearData, key, i));
+}
+function sumSeries(yearData, keys) {
+  return IDX.map((i) => {
+    let s = 0;
+    let any = false;
+    for (const k of keys) {
+      const v = getVal(yearData, k, i);
+      if (v != null) {
+        s += v;
+        any = true;
+      }
+    }
+    return any ? s : null;
+  });
+}
+function pctSeries(a, b) {
+  return IDX.map((i) => {
+    const r = safeDiv(a[i], b[i]);
+    return r == null ? null : r * 100;
+  });
+}
+function ratioSeries(a, b) {
+  return IDX.map((i) => safeDiv(a[i], b[i]));
+}
+function cumulativeSeries(s) {
+  let run = 0;
+  let has = false;
+  return IDX.map((i) => {
+    if (s[i] != null) {
+      run += s[i];
+      has = true;
+    }
+    return has ? run : null;
+  });
+}
+function diffSeries(a, b) {
+  return IDX.map((i) => {
+    if (a[i] == null && b[i] == null) return null;
+    return (a[i] || 0) - (b[i] || 0);
+  });
+}
+// Sum of a series from Jan through `latest`.
+function seriesSum(s, latest) {
+  if (latest < 0) return null;
+  let acc = 0;
+  let any = false;
+  for (let i = 0; i <= latest; i++) {
+    if (s[i] != null) {
+      acc += s[i];
+      any = true;
+    }
+  }
+  return any ? acc : null;
+}
+function pct(a, b) {
+  const r = safeDiv(a, b);
+  return r == null ? null : r * 100;
+}
+function valueAt(s, i) {
+  return i >= 0 && i < 12 ? s[i] : null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Editable cell + info tooltip
+// ─────────────────────────────────────────────────────────────────────────────
+function Cell({ value, unit, onCommit }) {
+  const [focused, setFocused] = useState(false);
+  const [draft, setDraft] = useState('');
+  const shown = focused ? draft : value == null ? '' : fmtByUnit(value, unit);
+
+  const commit = () => {
+    const t = draft.trim().replace(/,/g, '');
+    if (t === '') onCommit(null);
+    else {
+      const n = parseFloat(t);
+      onCommit(Number.isFinite(n) ? n : null);
+    }
+  };
+
+  return (
+    <input
+      value={shown}
+      placeholder={DASH}
+      inputMode="decimal"
+      onFocus={() => {
+        setFocused(true);
+        setDraft(value == null ? '' : String(value));
+      }}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={() => {
+        commit();
+        setFocused(false);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') e.currentTarget.blur();
+      }}
+      style={{
+        width: 62,
+        textAlign: 'right',
+        fontFamily: 'inherit',
+        fontSize: 13,
+        color: C.text,
+        background: 'transparent',
+        border: 'none',
+        borderBottom: `1px solid ${focused ? C.blueLight : 'transparent'}`,
+        padding: '5px 3px',
+        outline: 'none',
+      }}
+    />
+  );
+}
+
+function InfoTip({ text }) {
+  return (
+    <span
+      title={text}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: 14,
+        height: 14,
+        borderRadius: '50%',
+        border: `1px solid ${C.muted}`,
+        color: C.muted,
+        fontSize: 9,
+        marginLeft: 5,
+        cursor: 'help',
+        verticalAlign: 'middle',
+        fontFamily: 'var(--font-head)',
+        fontStyle: 'italic',
+        lineHeight: 1,
+      }}
+    >
+      i
+    </span>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Metric table
+// ─────────────────────────────────────────────────────────────────────────────
+const thBase = {
+  fontSize: 10,
+  fontWeight: 500,
+  letterSpacing: '0.08em',
+  textTransform: 'uppercase',
+  color: C.muted,
+  padding: '8px 4px',
+  textAlign: 'right',
+  whiteSpace: 'nowrap',
+};
+
+function MetricTable({ yearData, rows, updateMetric }) {
+  const latest = latestMonthIndex(yearData);
+
+  const inputYtd = (key, mode) => {
+    if (latest < 0 || mode === 'none') return null;
+    if (mode === 'last') return getVal(yearData, key, latest);
+    const s = rawSeries(yearData, key);
+    return seriesSum(s, latest);
+  };
+
+  return (
+    <div style={{ overflowX: 'auto' }}>
+      <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 920 }}>
+        <thead>
+          <tr style={{ borderBottom: `1px solid ${C.border}` }}>
+            <th
+              style={{
+                ...thBase,
+                textAlign: 'left',
+                paddingLeft: 8,
+                position: 'sticky',
+                left: 0,
+                background: C.card,
+                minWidth: 190,
+              }}
+            />
+            {MONTHS.map((m) => (
+              <th key={m} style={thBase}>
+                {m}
+              </th>
+            ))}
+            <th style={{ ...thBase, borderLeft: `1px solid ${C.border}` }}>
+              YTD
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, ri) => {
+            if (row.kind === 'subhead') {
+              return (
+                <tr key={`s${ri}`}>
+                  <td
+                    colSpan={14}
+                    style={{
+                      ...thBase,
+                      textAlign: 'left',
+                      paddingLeft: 8,
+                      paddingTop: 16,
+                      color: C.text,
+                    }}
+                  >
+                    {row.label}
+                  </td>
+                </tr>
+              );
+            }
+
+            if (row.kind === 'input') {
+              const ytd = inputYtd(row.key, row.ytd || 'sum');
+              return (
+                <tr key={row.key} style={{ borderBottom: `1px solid ${C.bg}` }}>
+                  <td
+                    style={{
+                      textAlign: 'left',
+                      fontSize: 13,
+                      padding: '2px 8px',
+                      whiteSpace: 'nowrap',
+                      position: 'sticky',
+                      left: 0,
+                      background: C.card,
+                    }}
+                  >
+                    {row.label}
+                  </td>
+                  {MONTHS.map((m, i) => (
+                    <td key={m} style={{ textAlign: 'right', padding: '0 1px' }}>
+                      <Cell
+                        value={getVal(yearData, row.key, i)}
+                        unit={row.unit}
+                        onCommit={(v) => updateMetric(row.key, m, v)}
+                      />
+                    </td>
+                  ))}
+                  <td
+                    style={{
+                      textAlign: 'right',
+                      fontSize: 13,
+                      padding: '2px 6px',
+                      borderLeft: `1px solid ${C.border}`,
+                      color: C.muted,
+                    }}
+                  >
+                    {ytd == null ? DASH : fmtByUnit(ytd, row.unit)}
+                  </td>
+                </tr>
+              );
+            }
+
+            // calc row
+            return (
+              <tr key={`c${ri}`} style={{ background: 'rgba(232,228,220,0.4)' }}>
+                <td
+                  style={{
+                    textAlign: 'left',
+                    fontSize: 13,
+                    fontWeight: 600,
+                    padding: '6px 8px',
+                    whiteSpace: 'nowrap',
+                    position: 'sticky',
+                    left: 0,
+                    background: '#f3f1ea',
+                  }}
+                >
+                  {row.label}
+                  <InfoTip text={row.formula} />
+                </td>
+                {row.values.map((v, i) => (
+                  <td
+                    key={i}
+                    style={{
+                      textAlign: 'right',
+                      fontSize: 13,
+                      fontWeight: 600,
+                      padding: '6px 5px',
+                    }}
+                  >
+                    {v == null ? DASH : fmtByUnit(v, row.unit)}
+                  </td>
+                ))}
+                <td
+                  style={{
+                    textAlign: 'right',
+                    fontSize: 13,
+                    fontWeight: 700,
+                    padding: '6px 6px',
+                    borderLeft: `1px solid ${C.border}`,
+                  }}
+                >
+                  {row.ytd == null ? DASH : fmtByUnit(row.ytd, row.unit)}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function calc(label, unit, values, ytd, formula) {
+  return { kind: 'calc', label, unit, values, ytd, formula };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Chart kit
+// ─────────────────────────────────────────────────────────────────────────────
+const GRID = { strokeDasharray: '3 3', vertical: false, stroke: C.border };
+const X_AXIS = {
+  dataKey: 'm',
+  tickLine: false,
+  axisLine: false,
+  tick: { fontSize: 11, fill: C.muted },
+};
+const yAxis = (extra = {}) => ({
+  tickLine: false,
+  axisLine: false,
+  width: 46,
+  tick: { fontSize: 11, fill: C.muted },
+  tickFormatter: (v) => compact(v),
+  ...extra,
+});
+
+function ChartCard({ title, accent, height = 240, children }) {
+  return (
+    <Card accent={accent} style={{ paddingBottom: 12 }}>
+      <h3 style={{ fontSize: 15, marginBottom: 14 }}>{title}</h3>
+      <ResponsiveContainer width="100%" height={height}>
+        {children}
+      </ResponsiveContainer>
+    </Card>
+  );
+}
+
+function ChartTooltip({ active, payload, label, fmt }) {
+  if (!active || !payload || !payload.length) return null;
+  const f = fmt || fmtNumber;
+  return (
+    <div
+      style={{
+        background: '#fff',
+        border: `1px solid ${C.border}`,
+        borderRadius: 10,
+        padding: '8px 10px',
+        boxShadow: '0 4px 14px rgba(0,0,0,0.06)',
+        fontSize: 12,
+      }}
+    >
+      <div style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
+      {payload.map((p) => (
+        <div key={p.dataKey} style={{ color: p.color || p.stroke }}>
+          {p.name}: {p.value == null ? DASH : f(p.value)}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+const monthChartData = (seriesMap) =>
+  IDX.map((i) => {
+    const row = { m: MONTHS[i] };
+    for (const [name, s] of Object.entries(seriesMap)) row[name] = s[i];
+    return row;
+  });
+
+function gradient(id, color) {
+  return (
+    <defs>
+      <linearGradient id={id} x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stopColor={color} stopOpacity={0.25} />
+        <stop offset="100%" stopColor={color} stopOpacity={0} />
+      </linearGradient>
+    </defs>
+  );
+}
+
+const TwoCol = ({ children }) => (
+  <div
+    style={{
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
+      gap: 16,
+    }}
+  >
+    {children}
+  </div>
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Downloads tab
+// ─────────────────────────────────────────────────────────────────────────────
+const STORE_KEYS = [
+  ['dl_kaios', 'KaiOS', C.blue],
+  ['dl_googlePlay', 'Google Play', C.green],
+  ['dl_palmStore', 'Palm Store', C.amber],
+  ['dl_indusStore', 'Indus Store', C.purple],
+  ['dl_vivoStore', 'Vivo Store', C.red],
+];
+
+function DownloadsTab({ yearData, updateMetric }) {
+  const latest = latestMonthIndex(yearData);
+  const storeKeys = STORE_KEYS.map((s) => s[0]);
+  const acqKeys = ['dl_ambassadorCosts', 'dl_paidCampaignSpend'];
+
+  const newDownloads = sumSeries(yearData, storeKeys);
+  const cumDownloads = cumulativeSeries(newDownloads);
+  const newUsers = rawSeries(yearData, 'u_newUsers');
+  const conversion = pctSeries(newUsers, newDownloads);
+  const totalMarketing = sumSeries(yearData, acqKeys);
+  const cpnd = ratioSeries(totalMarketing, newDownloads);
+  const cpnu = ratioSeries(totalMarketing, newUsers);
+
+  const ndY = seriesSum(newDownloads, latest);
+  const nuY = seriesSum(newUsers, latest);
+  const tmY = seriesSum(totalMarketing, latest);
+
+  const rows = [
+    { kind: 'subhead', label: 'Downloads by store' },
+    ...STORE_KEYS.map(([key, label]) => ({ kind: 'input', key, label, unit: 'count' })),
+    calc('New Downloads', 'count', newDownloads, ndY, 'Sum of all store downloads for the month.'),
+    calc(
+      'Cumulative Downloads',
+      'count',
+      cumDownloads,
+      valueAt(cumDownloads, latest),
+      'Running total of new downloads from January.'
+    ),
+    { kind: 'subhead', label: 'Acquisition' },
+    { kind: 'input', key: 'dl_ambassadorCosts', label: 'Ambassador Costs', unit: 'usd' },
+    { kind: 'input', key: 'dl_paidCampaignSpend', label: 'Paid Campaign Spend', unit: 'usd' },
+    calc('Total Marketing Spend', 'usd', totalMarketing, tmY, 'Ambassador costs + paid campaign spend.'),
+    calc('Download → User Conversion', 'percent', conversion, pct(nuY, ndY), 'New users ÷ new downloads.'),
+    calc('Cost Per New Download', 'ratio', cpnd, safeDiv(tmY, ndY), 'Total marketing spend ÷ new downloads.'),
+    calc('Cost Per New User', 'ratio', cpnu, safeDiv(tmY, nuY), 'Total marketing spend ÷ new users.'),
+  ];
+
+  const storeData = monthChartData(
+    Object.fromEntries(STORE_KEYS.map(([key, label]) => [label, rawSeries(yearData, key)]))
+  );
+
+  return (
+    <div style={{ display: 'grid', gap: 16 }}>
+      <Card accent={C.blue}>
+        <h2 style={{ fontSize: 18, marginBottom: 12 }}>Downloads</h2>
+        <MetricTable yearData={yearData} rows={rows} updateMetric={updateMetric} />
+      </Card>
+      <ChartCard title="Downloads by store" accent={C.blue}>
+        <LineChart data={storeData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+          <CartesianGrid {...GRID} />
+          <XAxis {...X_AXIS} />
+          <YAxis {...yAxis()} />
+          <Tooltip content={<ChartTooltip fmt={fmtNumber} />} />
+          <Legend wrapperStyle={{ fontSize: 11 }} />
+          {STORE_KEYS.map(([key, label, color]) => (
+            <Line
+              key={key}
+              type="monotone"
+              dataKey={label}
+              stroke={color}
+              strokeWidth={2}
+              dot={false}
+              connectNulls
+            />
+          ))}
+        </LineChart>
+      </ChartCard>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Users tab
+// ─────────────────────────────────────────────────────────────────────────────
+function UsersTab({ yearData, updateMetric }) {
+  const latest = latestMonthIndex(yearData);
+  const newUsers = rawSeries(yearData, 'u_newUsers');
+  const mau = rawSeries(yearData, 'u_mau');
+  const dau = rawSeries(yearData, 'u_dau');
+  const churned = rawSeries(yearData, 'u_churned');
+
+  const dauMau = pctSeries(dau, mau);
+  const netGrowth = diffSeries(newUsers, churned);
+  const cumUsers = cumulativeSeries(newUsers);
+
+  const nuY = seriesSum(newUsers, latest);
+  const chY = seriesSum(churned, latest);
+
+  const rows = [
+    { kind: 'input', key: 'u_newUsers', label: 'New Users', unit: 'count' },
+    { kind: 'input', key: 'u_mau', label: 'MAU', unit: 'count', ytd: 'last' },
+    { kind: 'input', key: 'u_dau', label: 'DAU', unit: 'count', ytd: 'last' },
+    { kind: 'input', key: 'u_churned', label: 'Churned Users', unit: 'count' },
+    calc('DAU / MAU', 'percent', dauMau, pct(valueAt(dau, latest), valueAt(mau, latest)), 'DAU ÷ MAU (latest month for YTD).'),
+    calc('Net User Growth', 'count', netGrowth, nuY == null && chY == null ? null : (nuY || 0) - (chY || 0), 'New users − churned users.'),
+    calc('Cumulative Total Users', 'count', cumUsers, valueAt(cumUsers, latest), 'Running total of new users from January.'),
+  ];
+
+  const data = monthChartData({ MAU: mau, 'New Users': newUsers, 'Cumulative Users': cumUsers });
+
+  return (
+    <div style={{ display: 'grid', gap: 16 }}>
+      <Card accent={C.green}>
+        <h2 style={{ fontSize: 18, marginBottom: 12 }}>Users</h2>
+        <MetricTable yearData={yearData} rows={rows} updateMetric={updateMetric} />
+      </Card>
+      <ChartCard title="MAU vs new users (with cumulative users)" accent={C.green}>
+        <ComposedChart data={data} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+          <CartesianGrid {...GRID} />
+          <XAxis {...X_AXIS} />
+          <YAxis {...yAxis()} yAxisId="left" />
+          <YAxis {...yAxis({ orientation: 'right' })} yAxisId="right" />
+          <Tooltip content={<ChartTooltip fmt={fmtNumber} />} />
+          <Legend wrapperStyle={{ fontSize: 11 }} />
+          <Bar yAxisId="left" dataKey="MAU" fill={C.blue} barSize={18} radius={[4, 4, 0, 0]} />
+          <Bar yAxisId="left" dataKey="New Users" fill={C.green} barSize={18} radius={[4, 4, 0, 0]} />
+          <Line yAxisId="right" type="monotone" dataKey="Cumulative Users" stroke={C.purple} strokeWidth={2} dot={false} connectNulls />
+        </ComposedChart>
+      </ChartCard>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Transactions tab
+// ─────────────────────────────────────────────────────────────────────────────
+function TransactionsTab({ yearData, updateMetric }) {
+  const latest = latestMonthIndex(yearData);
+  const countKeys = ['tx_sendP2P', 'tx_receiveP2P', 'tx_cashOut', 'tx_airtime', 'tx_cardRedemption', 'tx_other'];
+  const valueKeys = ['tx_sendVolume', 'tx_cashOutVolume', 'tx_cardRedemptionVolume'];
+
+  const totalTx = sumSeries(yearData, countKeys);
+  const totalVol = sumSeries(yearData, valueKeys);
+  const avgSize = ratioSeries(totalVol, totalTx);
+  const attempts = rawSeries(yearData, 'tx_offrampAttempts');
+  const successful = rawSeries(yearData, 'tx_offrampSuccessful');
+  const successRate = pctSeries(successful, attempts);
+
+  const txY = seriesSum(totalTx, latest);
+  const volY = seriesSum(totalVol, latest);
+  const attY = seriesSum(attempts, latest);
+  const sucY = seriesSum(successful, latest);
+
+  const rows = [
+    { kind: 'subhead', label: 'Volume (counts)' },
+    { kind: 'input', key: 'tx_sendP2P', label: 'Send P2P', unit: 'count' },
+    { kind: 'input', key: 'tx_receiveP2P', label: 'Receive P2P', unit: 'count' },
+    { kind: 'input', key: 'tx_cashOut', label: 'Cash-Out', unit: 'count' },
+    { kind: 'input', key: 'tx_airtime', label: 'Airtime Top-Up', unit: 'count' },
+    { kind: 'input', key: 'tx_cardRedemption', label: 'Card Redemption', unit: 'count' },
+    { kind: 'input', key: 'tx_other', label: 'Other', unit: 'count' },
+    calc('Total Transactions', 'count', totalTx, txY, 'Sum of all transaction counts.'),
+    { kind: 'subhead', label: 'Value (USDT)' },
+    { kind: 'input', key: 'tx_sendVolume', label: 'Send Volume', unit: 'usdt' },
+    { kind: 'input', key: 'tx_cashOutVolume', label: 'Cash-Out Volume', unit: 'usdt' },
+    { kind: 'input', key: 'tx_cardRedemptionVolume', label: 'Card Redemption Volume', unit: 'usdt' },
+    calc('Total Volume', 'usdt', totalVol, volY, 'Sum of all value lines (USDT).'),
+    calc('Average Transaction Size', 'ratio', avgSize, safeDiv(volY, txY), 'Total volume ÷ total transactions.'),
+    { kind: 'subhead', label: 'Off-ramp' },
+    { kind: 'input', key: 'tx_offrampAttempts', label: 'Attempts', unit: 'count' },
+    { kind: 'input', key: 'tx_offrampSuccessful', label: 'Successful', unit: 'count' },
+    { kind: 'input', key: 'tx_offrampFailed', label: 'Failed', unit: 'count' },
+    calc('Off-Ramp Success Rate', 'percent', successRate, pct(sucY, attY), 'Successful ÷ attempts.'),
+  ];
+
+  const volData = monthChartData({
+    'Send Volume': rawSeries(yearData, 'tx_sendVolume'),
+    'Cash-Out Volume': rawSeries(yearData, 'tx_cashOutVolume'),
+    'Card Redemption Volume': rawSeries(yearData, 'tx_cardRedemptionVolume'),
+    'Off-Ramp Rate': successRate,
+  });
+
+  return (
+    <div style={{ display: 'grid', gap: 16 }}>
+      <Card accent={C.amber}>
+        <h2 style={{ fontSize: 18, marginBottom: 12 }}>Transactions</h2>
+        <MetricTable yearData={yearData} rows={rows} updateMetric={updateMetric} />
+      </Card>
+      <ChartCard title="Transaction volume (USDT) & off-ramp success rate" accent={C.amber}>
+        <ComposedChart data={volData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+          <CartesianGrid {...GRID} />
+          <XAxis {...X_AXIS} />
+          <YAxis {...yAxis()} yAxisId="left" />
+          <YAxis {...yAxis({ orientation: 'right', tickFormatter: (v) => `${Math.round(v)}%`, domain: [0, 100] })} yAxisId="right" />
+          <Tooltip content={<ChartTooltip fmt={fmtUSDT} />} />
+          <Legend wrapperStyle={{ fontSize: 11 }} />
+          <Bar yAxisId="left" dataKey="Send Volume" stackId="v" fill={C.amber} barSize={20} />
+          <Bar yAxisId="left" dataKey="Cash-Out Volume" stackId="v" fill={C.blue} barSize={20} />
+          <Bar yAxisId="left" dataKey="Card Redemption Volume" stackId="v" fill={C.purple} barSize={20} radius={[4, 4, 0, 0]} />
+          <Line yAxisId="right" type="monotone" dataKey="Off-Ramp Rate" stroke={C.green} strokeWidth={2} dot={false} connectNulls />
+        </ComposedChart>
+      </ChartCard>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Cards tab
+// ─────────────────────────────────────────────────────────────────────────────
+function CardsTab({ yearData, updateMetric }) {
+  const latest = latestMonthIndex(yearData);
+  const sold = rawSeries(yearData, 'c_sold');
+  const redeemed = rawSeries(yearData, 'c_redeemed');
+  const gross = rawSeries(yearData, 'c_grossRevenue');
+  const lost = rawSeries(yearData, 'c_discountFeesLost');
+
+  const outstanding = diffSeries(cumulativeSeries(sold), cumulativeSeries(redeemed));
+  const redemptionRate = pctSeries(redeemed, sold);
+  const netEarnings = diffSeries(gross, lost);
+
+  const soldY = seriesSum(sold, latest);
+  const redY = seriesSum(redeemed, latest);
+  const grossY = seriesSum(gross, latest);
+  const lostY = seriesSum(lost, latest);
+
+  const rows = [
+    { kind: 'subhead', label: 'Activity' },
+    { kind: 'input', key: 'c_sold', label: 'Cards Sold', unit: 'count' },
+    { kind: 'input', key: 'c_redeemed', label: 'Cards Redeemed', unit: 'count' },
+    { kind: 'input', key: 'c_uniqueUsers', label: 'Unique Users', unit: 'count' },
+    { kind: 'input', key: 'c_usdtVolume', label: 'Card USDT Volume', unit: 'usdt' },
+    { kind: 'input', key: 'c_discountFeesLost', label: 'Discount & Fees Lost USD', unit: 'usd' },
+    { kind: 'input', key: 'c_grossRevenue', label: 'Gross Card Revenue USD', unit: 'usd' },
+    calc('Cards Outstanding', 'count', outstanding, valueAt(outstanding, latest), 'Cumulative sold − cumulative redeemed.'),
+    calc('Redemption Rate', 'percent', redemptionRate, pct(redY, soldY), 'Cards redeemed ÷ cards sold.'),
+    calc('Net Card Earnings', 'usd', netEarnings, grossY == null && lostY == null ? null : (grossY || 0) - (lostY || 0), 'Gross card revenue − discount & fees lost.'),
+    { kind: 'subhead', label: 'By market' },
+    { kind: 'input', key: 'c_mktKenya', label: 'Kenya', unit: 'count' },
+    { kind: 'input', key: 'c_mktNigeria', label: 'Nigeria', unit: 'count' },
+    { kind: 'input', key: 'c_mktOther', label: 'Other', unit: 'count' },
+  ];
+
+  const soldRedeemed = monthChartData({ 'Cards Sold': sold, 'Cards Redeemed': redeemed });
+  const marketTotals = [
+    { name: 'Kenya', value: seriesSum(rawSeries(yearData, 'c_mktKenya'), latest) || 0, color: C.purple },
+    { name: 'Nigeria', value: seriesSum(rawSeries(yearData, 'c_mktNigeria'), latest) || 0, color: C.blue },
+    { name: 'Other', value: seriesSum(rawSeries(yearData, 'c_mktOther'), latest) || 0, color: C.amber },
+  ];
+  const marketHasData = marketTotals.some((m) => m.value > 0);
+
+  return (
+    <div style={{ display: 'grid', gap: 16 }}>
+      <Card accent={C.purple}>
+        <h2 style={{ fontSize: 18, marginBottom: 12 }}>Cards</h2>
+        <MetricTable yearData={yearData} rows={rows} updateMetric={updateMetric} />
+      </Card>
+      <TwoCol>
+        <ChartCard title="Cards sold vs redeemed" accent={C.purple}>
+          <BarChart data={soldRedeemed} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+            <CartesianGrid {...GRID} />
+            <XAxis {...X_AXIS} />
+            <YAxis {...yAxis()} />
+            <Tooltip content={<ChartTooltip fmt={fmtNumber} />} />
+            <Legend wrapperStyle={{ fontSize: 11 }} />
+            <Bar dataKey="Cards Sold" fill={C.purple} barSize={18} radius={[4, 4, 0, 0]} />
+            <Bar dataKey="Cards Redeemed" fill={C.green} barSize={18} radius={[4, 4, 0, 0]} />
+          </BarChart>
+        </ChartCard>
+        <ChartCard title="Cards by market (YTD)" accent={C.purple}>
+          {marketHasData ? (
+            <PieChart>
+              <Pie data={marketTotals} dataKey="value" nameKey="name" innerRadius={55} outerRadius={90} paddingAngle={2}>
+                {marketTotals.map((m) => (
+                  <RCell key={m.name} fill={m.color} />
+                ))}
+              </Pie>
+              <Tooltip content={<ChartTooltip fmt={fmtNumber} />} />
+              <Legend wrapperStyle={{ fontSize: 11 }} />
+            </PieChart>
+          ) : (
+            <EmptyChart />
+          )}
+        </ChartCard>
+      </TwoCol>
+    </div>
+  );
+}
+
+function EmptyChart() {
+  return (
+    <div
+      style={{
+        height: '100%',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        color: C.muted,
+        fontSize: 13,
+      }}
+    >
+      No data yet
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Revenue tab
+// ─────────────────────────────────────────────────────────────────────────────
+function RevenueTab({ yearData, updateMetric }) {
+  const latest = latestMonthIndex(yearData);
+  const revKeys = ['r_transactionFees', 'r_cardRedemptionFees', 'r_other'];
+  const costKeys = ['cost_ambassador', 'cost_gasFees', 'cost_cardPrinting', 'cost_infrastructure', 'cost_marketingSpend'];
+
+  const totalRev = sumSeries(yearData, revKeys);
+  const totalCost = sumSeries(yearData, costKeys);
+  const netRev = diffSeries(totalRev, totalCost);
+  const mau = rawSeries(yearData, 'u_mau');
+  const rpu = ratioSeries(totalRev, mau);
+
+  const revY = seriesSum(totalRev, latest);
+  const costY = seriesSum(totalCost, latest);
+
+  const rows = [
+    { kind: 'subhead', label: 'Revenue' },
+    { kind: 'input', key: 'r_transactionFees', label: 'Transaction Fees', unit: 'usd' },
+    { kind: 'input', key: 'r_cardRedemptionFees', label: 'Card Redemption Fees', unit: 'usd' },
+    { kind: 'input', key: 'r_other', label: 'Other', unit: 'usd' },
+    calc('Total Revenue', 'usd', totalRev, revY, 'Sum of all revenue lines.'),
+    { kind: 'subhead', label: 'Costs' },
+    { kind: 'input', key: 'cost_ambassador', label: 'Ambassador Costs', unit: 'usd' },
+    { kind: 'input', key: 'cost_gasFees', label: 'Gas Fees', unit: 'usd' },
+    { kind: 'input', key: 'cost_cardPrinting', label: 'Card Printing', unit: 'usd' },
+    { kind: 'input', key: 'cost_infrastructure', label: 'Infrastructure', unit: 'usd' },
+    { kind: 'input', key: 'cost_marketingSpend', label: 'Marketing Spend', unit: 'usd' },
+    calc('Total Costs', 'usd', totalCost, costY, 'Sum of all cost lines.'),
+    calc('Net Revenue', 'usd', netRev, revY == null && costY == null ? null : (revY || 0) - (costY || 0), 'Total revenue − total costs.'),
+    calc('Revenue Per Active User', 'ratio', rpu, safeDiv(revY, valueAt(mau, latest)), 'Total revenue ÷ MAU (latest month for YTD).'),
+  ];
+
+  const rvc = monthChartData({ Revenue: totalRev, Costs: totalCost, 'Net Revenue': netRev });
+  const netData = monthChartData({ 'Net Revenue': netRev });
+
+  return (
+    <div style={{ display: 'grid', gap: 16 }}>
+      <Card accent={C.green}>
+        <h2 style={{ fontSize: 18, marginBottom: 12 }}>Revenue</h2>
+        <MetricTable yearData={yearData} rows={rows} updateMetric={updateMetric} />
+      </Card>
+      <TwoCol>
+        <ChartCard title="Revenue vs costs (with net)" accent={C.green}>
+          <ComposedChart data={rvc} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+            <CartesianGrid {...GRID} />
+            <XAxis {...X_AXIS} />
+            <YAxis {...yAxis()} />
+            <Tooltip content={<ChartTooltip fmt={fmtNumber} />} />
+            <Legend wrapperStyle={{ fontSize: 11 }} />
+            <Bar dataKey="Revenue" fill={C.green} barSize={18} radius={[4, 4, 0, 0]} />
+            <Bar dataKey="Costs" fill={C.red} barSize={18} radius={[4, 4, 0, 0]} />
+            <Line type="monotone" dataKey="Net Revenue" stroke={C.purple} strokeWidth={2} dot={false} connectNulls />
+          </ComposedChart>
+        </ChartCard>
+        <ChartCard title="Net revenue" accent={C.green}>
+          <AreaChart data={netData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+            {gradient('netRevGrad', C.green)}
+            <CartesianGrid {...GRID} />
+            <XAxis {...X_AXIS} />
+            <YAxis {...yAxis()} />
+            <Tooltip content={<ChartTooltip fmt={fmtNumber} />} />
+            <Area type="monotone" dataKey="Net Revenue" stroke={C.green} strokeWidth={2} fill="url(#netRevGrad)" connectNulls />
+          </AreaChart>
+        </ChartCard>
+      </TwoCol>
+    </div>
+  );
+}
+
 function TabContent({
   tab,
   yearData,
@@ -866,29 +1737,45 @@ function TabContent({
   years,
   user,
   setUser,
+  updateMetric,
+  updateNote,
   onDeleteYear,
   onLogout,
 }) {
-  if (tab === 'Settings') {
-    return (
-      <SettingsTab
-        user={user}
-        setUser={setUser}
-        activeYear={activeYear}
-        years={years}
-        onDeleteYear={onDeleteYear}
-        onLogout={onLogout}
-      />
-    );
+  const common = { yearData, activeYear, updateMetric, updateNote };
+  switch (tab) {
+    case 'Downloads':
+      return <DownloadsTab {...common} />;
+    case 'Users':
+      return <UsersTab {...common} />;
+    case 'Transactions':
+      return <TransactionsTab {...common} />;
+    case 'Cards':
+      return <CardsTab {...common} />;
+    case 'Revenue':
+      return <RevenueTab {...common} />;
+    case 'Settings':
+      return (
+        <SettingsTab
+          user={user}
+          setUser={setUser}
+          activeYear={activeYear}
+          years={years}
+          onDeleteYear={onDeleteYear}
+          onLogout={onLogout}
+        />
+      );
+    case 'Dashboard':
+    default:
+      return (
+        <Card accent={C.blue}>
+          <h2 style={{ fontSize: 20, marginBottom: 6 }}>Dashboard</h2>
+          <p style={{ color: C.muted, margin: 0 }}>
+            The Dashboard is built in the next phase. Viewing {activeYear}.
+          </p>
+        </Card>
+      );
   }
-  return (
-    <Card accent={C.blue}>
-      <h2 style={{ fontSize: 20, marginBottom: 6 }}>{tab}</h2>
-      <p style={{ color: C.muted, margin: 0 }}>
-        The {tab} tab is coming next. Viewing data for {activeYear}.
-      </p>
-    </Card>
-  );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
