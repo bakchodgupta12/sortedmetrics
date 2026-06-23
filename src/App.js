@@ -1706,7 +1706,7 @@ function TransactionsTab({ yearData, updateMetric, allYears, activeYear }) {
   const latest = latestMonthIndex(yearData);
   // tx_airtime is retired (folds into Other); kept in the model for old data.
   const countKeys = ['tx_sendP2P', 'tx_receiveP2P', 'tx_cashOut', 'tx_cardRedemption', 'tx_other'];
-  const valueKeys = ['tx_sendVolume', 'tx_cashOutVolume', 'tx_cardRedemptionVolume', 'tx_otherVolume'];
+  const valueKeys = ['tx_sendVolume', 'tx_receiveVolume', 'tx_cashOutVolume', 'tx_cardRedemptionVolume', 'tx_otherVolume'];
 
   const totalTx = sumSeries(yearData, countKeys);
   const totalVol = sumSeries(yearData, valueKeys);
@@ -1740,7 +1740,8 @@ function TransactionsTab({ yearData, updateMetric, allYears, activeYear }) {
       blankTotal: true,
     },
     { kind: 'subhead', label: 'Transaction Volume' },
-    { kind: 'input', key: 'tx_sendVolume', label: 'Send & Receive', unit: 'usdt' },
+    { kind: 'input', key: 'tx_sendVolume', label: 'Send', unit: 'usdt' },
+    { kind: 'input', key: 'tx_receiveVolume', label: 'Receive', unit: 'usdt' },
     { kind: 'input', key: 'tx_cashOutVolume', label: 'Cash-Out', unit: 'usdt' },
     { kind: 'input', key: 'tx_cardRedemptionVolume', label: 'Top-up Cards', unit: 'usdt' },
     { kind: 'input', key: 'tx_otherVolume', label: 'Other', unit: 'usdt', info: TX_OTHER_INFO },
@@ -1762,11 +1763,11 @@ function TransactionsTab({ yearData, updateMetric, allYears, activeYear }) {
   ];
 
   const volData = monthChartData({
-    'Send & Receive': rawSeries(yearData, 'tx_sendVolume'),
+    Send: rawSeries(yearData, 'tx_sendVolume'),
+    Receive: rawSeries(yearData, 'tx_receiveVolume'),
     'Cash-Out': rawSeries(yearData, 'tx_cashOutVolume'),
     'Top-up Cards': rawSeries(yearData, 'tx_cardRedemptionVolume'),
     Other: rawSeries(yearData, 'tx_otherVolume'),
-    'Off-Ramp Rate': successRate,
   });
 
   return (
@@ -1775,19 +1776,18 @@ function TransactionsTab({ yearData, updateMetric, allYears, activeYear }) {
         <TabTitle title="Transactions" accent={C.amber} />
         <MetricTable yearData={yearData} rows={rows} updateMetric={updateMetric} />
       </Card>
-      <ChartCard title="Transaction Volume (USDT) & Off-Ramp Success Rate" accent={C.amber}>
+      <ChartCard title="Transaction Volume by Category" accent={C.amber}>
         <ComposedChart data={volData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
           <CartesianGrid {...GRID} />
           <XAxis {...X_AXIS} />
           <YAxis {...yAxis()} yAxisId="left" />
-          <YAxis {...yAxis({ orientation: 'right', tickFormatter: (v) => `${Math.round(v)}%`, domain: [0, 100] })} yAxisId="right" />
           <Tooltip content={<ChartTooltip fmt={fmtUSDT} />} />
           <Legend wrapperStyle={{ fontSize: 11 }} />
-          <Bar yAxisId="left" dataKey="Send & Receive" stackId="v" fill={C.amber} barSize={20} />
+          <Bar yAxisId="left" dataKey="Send" stackId="v" fill={C.amber} barSize={20} />
+          <Bar yAxisId="left" dataKey="Receive" stackId="v" fill={C.green} barSize={20} />
           <Bar yAxisId="left" dataKey="Cash-Out" stackId="v" fill={C.blue} barSize={20} />
           <Bar yAxisId="left" dataKey="Top-up Cards" stackId="v" fill={C.purple} barSize={20} />
           <Bar yAxisId="left" dataKey="Other" stackId="v" fill={C.gray400} barSize={20} radius={[4, 4, 0, 0]} />
-          <Line yAxisId="right" type="monotone" dataKey="Off-Ramp Rate" stroke={C.green} strokeWidth={2} dot={false} connectNulls />
         </ComposedChart>
       </ChartCard>
     </div>
@@ -2087,7 +2087,7 @@ function DashboardTab({ yearData, activeYear }) {
   const latest = latestMonthIndex(yearData);
   const storeKeys = STORE_KEYS.map((s) => s[0]);
   const countKeys = ['tx_sendP2P', 'tx_receiveP2P', 'tx_cashOut', 'tx_cardRedemption', 'tx_other'];
-  const valueKeys = ['tx_sendVolume', 'tx_cashOutVolume', 'tx_cardRedemptionVolume', 'tx_otherVolume'];
+  const valueKeys = ['tx_sendVolume', 'tx_receiveVolume', 'tx_cashOutVolume', 'tx_cardRedemptionVolume', 'tx_otherVolume'];
 
   const newDownloads = sumSeries(yearData, storeKeys);
   const newUsers = rawSeries(yearData, 'u_newUsers');

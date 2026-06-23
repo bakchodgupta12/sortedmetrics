@@ -1,7 +1,13 @@
 {
   "short_name": "Sorted Metrics",
   "name": "Sorted Wallet Metrics Tracker",
-  "icons": [],
+  "icons": [
+    {
+      "src": "favicon.png",
+      "type": "image/png",
+      "sizes": "224x224"
+    }
+  ],
   "start_url": ".",
   "display": "standalone",
   "theme_color": "#f7f5f0",

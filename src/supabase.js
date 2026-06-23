@@ -147,6 +147,7 @@ export const METRIC_GROUPS = {
       title: 'Value (USDT)',
       metrics: [
         { key: 'tx_sendVolume', label: 'Send Volume', unit: 'usdt' },
+        { key: 'tx_receiveVolume', label: 'Receive Volume', unit: 'usdt' },
         { key: 'tx_cashOutVolume', label: 'Cash-Out Volume', unit: 'usdt' },
         {
           key: 'tx_cardRedemptionVolume',
