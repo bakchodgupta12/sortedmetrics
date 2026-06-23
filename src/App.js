@@ -1617,7 +1617,7 @@ function DownloadsTab({ yearData, updateMetric, allYears, activeYear }) {
           <XAxis {...X_AXIS} />
           <YAxis {...yAxis()} />
           <Tooltip content={<ChartTooltip fmt={fmtNumber} />} />
-          <Legend wrapperStyle={{ fontSize: 11 }} />
+          <Legend wrapperStyle={{ fontSize: 11 }} itemSorter={null} />
           {STORE_KEYS.map(([key, label, color]) => (
             <Line
               key={key}
@@ -1782,7 +1782,7 @@ function TransactionsTab({ yearData, updateMetric, allYears, activeYear }) {
           <XAxis {...X_AXIS} />
           <YAxis {...yAxis()} yAxisId="left" />
           <Tooltip content={<ChartTooltip fmt={fmtUSDT} />} />
-          <Legend wrapperStyle={{ fontSize: 11 }} />
+          <Legend wrapperStyle={{ fontSize: 11 }} itemSorter={null} />
           <Bar yAxisId="left" dataKey="Send" stackId="v" fill={C.amber} barSize={20} />
           <Bar yAxisId="left" dataKey="Receive" stackId="v" fill={C.green} barSize={20} />
           <Bar yAxisId="left" dataKey="Cash-Out" stackId="v" fill={C.blue} barSize={20} />
@@ -1851,7 +1851,7 @@ function CardsTab({ yearData, updateMetric }) {
             <XAxis {...X_AXIS} />
             <YAxis {...yAxis()} />
             <Tooltip content={<ChartTooltip fmt={fmtNumber} />} />
-            <Legend wrapperStyle={{ fontSize: 11 }} />
+            <Legend wrapperStyle={{ fontSize: 11 }} itemSorter={null} />
             <Bar dataKey="Cards Sold" fill={C.purple} barSize={18} radius={[4, 4, 0, 0]} />
             <Bar dataKey="Cards Redeemed" fill={C.green} barSize={18} radius={[4, 4, 0, 0]} />
           </BarChart>
@@ -1865,7 +1865,7 @@ function CardsTab({ yearData, updateMetric }) {
                 ))}
               </Pie>
               <Tooltip content={<ChartTooltip fmt={fmtNumber} />} />
-              <Legend wrapperStyle={{ fontSize: 11 }} />
+              <Legend wrapperStyle={{ fontSize: 11 }} itemSorter={null} />
             </PieChart>
           ) : (
             <EmptyChart />
@@ -1943,7 +1943,7 @@ function RevenueTab({ yearData, updateMetric }) {
             <XAxis {...X_AXIS} />
             <YAxis {...yAxis()} />
             <Tooltip content={<ChartTooltip fmt={fmtNumber} />} />
-            <Legend wrapperStyle={{ fontSize: 11 }} />
+            <Legend wrapperStyle={{ fontSize: 11 }} itemSorter={null} />
             <Bar dataKey="Revenue" fill={C.green} barSize={18} radius={[4, 4, 0, 0]} />
             <Bar dataKey="Costs" fill={C.red} barSize={18} radius={[4, 4, 0, 0]} />
             <Line type="monotone" dataKey="Net Revenue" stroke={C.purple} strokeWidth={2} dot={false} connectNulls />
