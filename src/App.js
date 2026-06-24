@@ -1299,7 +1299,7 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD' }) {
             // next row starts a new group (an input or a section header).
             const prev = rows[ri - 1];
             const needsBreak =
-              prev && prev.kind === 'calc' && row.kind !== 'calc';
+              prev && prev.kind === 'calc' && row.kind !== 'calc' && !row.noBreak;
 
             if (row.kind === 'subhead') {
               return (
@@ -1411,7 +1411,7 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD' }) {
                   }}
                 >
                   {row.label}
-                  <InfoTip text={row.formula} />
+                  {row.formula && <InfoTip text={row.formula} />}
                 </td>
                 {row.values.map((v, i) => (
                   <td
@@ -1812,6 +1812,8 @@ function TransactionsTab({ yearData, updateMetric, allYears, activeYear }) {
 // matching entry on the Transactions tab for the same month.
 const TX_CARD_MISMATCH =
   'This figure does not match the Top-up Cards entry on the Transactions tab.';
+const REV_CARD_MISMATCH =
+  'This figure does not match the card revenue line on the Costs & Revenue tab.';
 
 // By-market is a snapshot, not a time series: each country's figures are single
 // totals stored in the first month slot. Colours follow the table row order.
@@ -1825,23 +1827,28 @@ const MARKETS = [
 function CardsTab({ yearData, updateMetric, allYears, activeYear }) {
   const latest = latestMonthIndex(yearData);
   const sold = rawSeries(yearData, 'c_sold');
-  const valueDistributed = rawSeries(yearData, 'c_valueDistributed');
+  const cardsVolume = rawSeries(yearData, 'c_valueDistributed');
   const fundsCollected = rawSeries(yearData, 'c_fundsCollected');
+  const grossRevenue = rawSeries(yearData, 'c_grossRevenue');
   const uniqueUsers = rawSeries(yearData, 'c_uniqueUsers');
 
-  // Card-channel cost and its derived rates.
-  const discountsFees = diffSeries(valueDistributed, fundsCollected);
-  const avgDiscountPct = pctSeries(discountsFees, valueDistributed);
-  const cacPerUser = ratioSeries(discountsFees, uniqueUsers);
+  // Card-channel cost, profitability and the derived rates.
+  const costOfSales = diffSeries(cardsVolume, fundsCollected);
+  const avgDiscountPct = pctSeries(costOfSales, cardsVolume);
+  const netRevenue = diffSeries(grossRevenue, costOfSales);
+  const cacPerUser = ratioSeries(costOfSales, uniqueUsers);
 
-  // YTD figures. Unique users can't be summed, so CAC has no meaningful YTD.
-  const valueDistY = seriesSum(valueDistributed, latest);
+  // YTD figures. Unique users can't be summed, so CAC has no meaningful YTD;
+  // the rate rows (Average Discount %) show a period-blended figure instead.
+  const volY = seriesSum(cardsVolume, latest);
   const fundsY = seriesSum(fundsCollected, latest);
-  const discFeesY = valueDistY == null && fundsY == null ? null : (valueDistY || 0) - (fundsY || 0);
+  const grossY = seriesSum(grossRevenue, latest);
+  const costOfSalesY = volY == null && fundsY == null ? null : (volY || 0) - (fundsY || 0);
+  const netRevY = grossY == null && costOfSalesY == null ? null : (grossY || 0) - (costOfSalesY || 0);
 
   // Lifetime running totals carry forward across years.
   const lifeSold = cumulativeSeriesFrom(sold, priorYearsTotal(allYears, activeYear, ['c_sold']));
-  const lifeValue = cumulativeSeriesFrom(valueDistributed, priorYearsTotal(allYears, activeYear, ['c_valueDistributed']));
+  const lifeVolume = cumulativeSeriesFrom(cardsVolume, priorYearsTotal(allYears, activeYear, ['c_valueDistributed']));
 
   const rows = [
     { kind: 'subhead', label: 'Card Activity' },
@@ -1855,9 +1862,9 @@ function CardsTab({ yearData, updateMetric, allYears, activeYear }) {
     {
       kind: 'input',
       key: 'c_valueDistributed',
-      label: 'Value Distributed',
+      label: 'Cards Volume',
       unit: 'usdt',
-      info: 'USDT value loaded onto the cards sold — what left our wallets to users.',
+      info: 'The monthly volume of top-up cards sold.',
       compare: { key: 'tx_cardRedemptionVolume', message: TX_CARD_MISMATCH },
     },
     {
@@ -1865,20 +1872,31 @@ function CardsTab({ yearData, updateMetric, allYears, activeYear }) {
       key: 'c_fundsCollected',
       label: 'Funds Collected',
       unit: 'usdt',
-      info: 'USDT remitted back to us from ambassador card sales.',
+      info: 'The funds remitted back to Sorted by ambassadors and distributors.',
     },
+    calc('Cost of Sales', 'usdt', costOfSales, costOfSalesY, 'The costs involved in selling the top-up cards. Calculated as Cards Volume − Funds Collected.'),
+    calc('Average Discount %', 'percent', avgDiscountPct, pct(costOfSalesY, volY), ''),
+    {
+      kind: 'input',
+      key: 'c_grossRevenue',
+      label: 'Gross Revenue',
+      unit: 'usdt',
+      noBreak: true,
+      info: 'The revenue generated via the top-up card redemptions this month.',
+      compare: { key: 'r_cardRedemptionFees', message: REV_CARD_MISMATCH },
+    },
+    calc('Net Revenue', 'usdt', netRevenue, netRevY, 'The net value generated after deducting Cost of Sales from Gross Revenue.'),
     {
       kind: 'input',
       key: 'c_uniqueUsers',
       label: 'Unique Users',
       unit: 'count',
       ytd: 'none',
-      info: 'Unique users who transacted via cards that month. Monthly uniques are not summed — the same user transacts across multiple months.',
+      noBreak: true,
+      info: 'The number of unique users who redeemed a top-up card this month.',
     },
-    calc('Discounts & Fees', 'usdt', discountsFees, discFeesY, 'The cost of the card channel — value we distributed minus funds collected back. Calculated as Value Distributed − Funds Collected.'),
-    calc('Average Discount %', 'percent', avgDiscountPct, pct(discFeesY, valueDistY), 'The share of distributed value lost to discounts and fees. Calculated as Discounts & Fees ÷ Value Distributed.'),
     {
-      ...calc('CAC per Transacting User', 'ratio', cacPerUser, null, 'Effective cost to acquire each transacting card user. Calculated as Discounts & Fees ÷ Unique Users.'),
+      ...calc('CAC per Transacting User', 'ratio', cacPerUser, null, ''),
       blankTotal: true,
     },
     { kind: 'subhead', label: 'Lifetime' },
@@ -1887,7 +1905,7 @@ function CardsTab({ yearData, updateMetric, allYears, activeYear }) {
       blankTotal: true,
     },
     {
-      ...calc('Total Value Distributed', 'usdt', lifeValue, null, 'Cumulative USDT value distributed since we began tracking. Carries forward across years.'),
+      ...calc('Total Cards Volume', 'usdt', lifeVolume, null, 'Cumulative volume of top-up cards sold since we began tracking. Carries forward across years.'),
       blankTotal: true,
     },
     {
@@ -1896,7 +1914,7 @@ function CardsTab({ yearData, updateMetric, allYears, activeYear }) {
       label: 'Total Unique Users',
       unit: 'count',
       ytd: 'last',
-      info: 'Manually entered deduplicated all-time unique card users. This is not a sum of the monthly Unique Users row — the same user transacts across multiple months, which would massively overcount.',
+      noBreak: true,
     },
   ];
 
@@ -1960,8 +1978,8 @@ function MarketSummaryTable({ yearData, updateMetric }) {
     const value = read(mk.value);
     const funds = read(mk.funds);
     const users = read(mk.users);
-    const discFees = value == null && funds == null ? null : (value || 0) - (funds || 0);
-    return { sold, value, funds, users, discPct: pct(discFees, value), cac: safeDiv(discFees, users) };
+    const costOfSales = value == null && funds == null ? null : (value || 0) - (funds || 0);
+    return { sold, value, funds, users, discPct: pct(costOfSales, value), cac: safeDiv(costOfSales, users) };
   };
 
   const sumCol = (k) => {
@@ -1980,8 +1998,8 @@ function MarketSummaryTable({ yearData, updateMetric }) {
   const tValue = sumCol('value');
   const tFunds = sumCol('funds');
   const tUsers = sumCol('users');
-  const tDiscFees = tValue == null && tFunds == null ? null : (tValue || 0) - (tFunds || 0);
-  const totals = { discPct: pct(tDiscFees, tValue), cac: safeDiv(tDiscFees, tUsers) };
+  const tCostOfSales = tValue == null && tFunds == null ? null : (tValue || 0) - (tFunds || 0);
+  const totals = { discPct: pct(tCostOfSales, tValue), cac: safeDiv(tCostOfSales, tUsers) };
 
   const headCell = (label, alignLeft, info) => (
     <th
@@ -2039,11 +2057,11 @@ function MarketSummaryTable({ yearData, updateMetric }) {
             <tr style={{ borderBottom: `1px solid ${C.border}` }}>
               {headCell('Country', true)}
               {headCell('Cards Sold')}
-              {headCell('Value Distributed')}
+              {headCell('Cards Volume')}
               {headCell('Funds Collected')}
-              {headCell('Average Discount %', false, 'Discounts & Fees ÷ Value Distributed for the country.')}
+              {headCell('Average Discount %', false, 'Cost of Sales ÷ Cards Volume for the country.')}
               {headCell('Unique Users')}
-              {headCell('CAC per Transacting User', false, 'Discounts & Fees ÷ Unique Users for the country.')}
+              {headCell('CAC per Transacting User', false, 'Cost of Sales ÷ Unique Users for the country.')}
             </tr>
           </thead>
           <tbody>

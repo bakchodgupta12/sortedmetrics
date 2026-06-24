@@ -171,8 +171,9 @@ export const METRIC_GROUPS = {
       title: 'Activity',
       metrics: [
         { key: 'c_sold', label: 'Cards Sold', unit: 'count' },
-        { key: 'c_valueDistributed', label: 'Value Distributed', unit: 'usdt' },
+        { key: 'c_valueDistributed', label: 'Cards Volume', unit: 'usdt' },
         { key: 'c_fundsCollected', label: 'Funds Collected', unit: 'usdt' },
+        { key: 'c_grossRevenue', label: 'Gross Revenue', unit: 'usdt' },
         { key: 'c_uniqueUsers', label: 'Unique Users', unit: 'count' },
         // Retired Activity fields — kept in the model so historical data loads.
         { key: 'c_redeemed', label: 'Cards Redeemed', unit: 'count' },
@@ -180,11 +181,6 @@ export const METRIC_GROUPS = {
         {
           key: 'c_discountFeesLost',
           label: 'Discount & Fees Lost USD',
-          unit: 'usd',
-        },
-        {
-          key: 'c_grossRevenue',
-          label: 'Gross Card Revenue USD',
           unit: 'usd',
         },
       ],
@@ -201,15 +197,15 @@ export const METRIC_GROUPS = {
       metrics: [
         // Per-country snapshot totals (entered directly, not tracked monthly).
         { key: 'c_mktKE_sold', label: 'Kenya — Cards Sold', unit: 'count' },
-        { key: 'c_mktKE_value', label: 'Kenya — Value Distributed', unit: 'usdt' },
+        { key: 'c_mktKE_value', label: 'Kenya — Cards Volume', unit: 'usdt' },
         { key: 'c_mktKE_funds', label: 'Kenya — Funds Collected', unit: 'usdt' },
         { key: 'c_mktKE_users', label: 'Kenya — Unique Users', unit: 'count' },
         { key: 'c_mktNG_sold', label: 'Nigeria — Cards Sold', unit: 'count' },
-        { key: 'c_mktNG_value', label: 'Nigeria — Value Distributed', unit: 'usdt' },
+        { key: 'c_mktNG_value', label: 'Nigeria — Cards Volume', unit: 'usdt' },
         { key: 'c_mktNG_funds', label: 'Nigeria — Funds Collected', unit: 'usdt' },
         { key: 'c_mktNG_users', label: 'Nigeria — Unique Users', unit: 'count' },
         { key: 'c_mktTZ_sold', label: 'Tanzania — Cards Sold', unit: 'count' },
-        { key: 'c_mktTZ_value', label: 'Tanzania — Value Distributed', unit: 'usdt' },
+        { key: 'c_mktTZ_value', label: 'Tanzania — Cards Volume', unit: 'usdt' },
         { key: 'c_mktTZ_funds', label: 'Tanzania — Funds Collected', unit: 'usdt' },
         { key: 'c_mktTZ_users', label: 'Tanzania — Unique Users', unit: 'count' },
         // Retired monthly by-market counts — kept so historical data loads.
