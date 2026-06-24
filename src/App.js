@@ -1432,6 +1432,49 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD' }) {
               );
             }
 
+            // Read-only "pulled" row: a value sourced from another tab, shown
+            // (muted, non-editable) rather than entered. No input affordance.
+            if (row.kind === 'readonly') {
+              const ytd = latest < 0 ? null : seriesSum(row.values, latest);
+              return (
+                <React.Fragment key={`r${ri}`}>
+                  {needsBreak && <DividerRow />}
+                  <tr style={{ borderBottom: `1px solid ${C.bg}` }}>
+                    <td
+                      style={{
+                        textAlign: 'left',
+                        fontSize: 13,
+                        padding: '7px 16px',
+                        whiteSpace: 'nowrap',
+                        position: 'sticky',
+                        left: 0,
+                        background: C.card,
+                      }}
+                    >
+                      {row.label}
+                      {row.info && <InfoTip text={row.info} />}
+                    </td>
+                    {MONTHS.map((m, i) => (
+                      <td key={m} style={{ textAlign: 'right', padding: '7px 10px', fontSize: 13, color: C.muted }}>
+                        {row.values[i] == null ? DASH : fmtByUnit(row.values[i], row.unit)}
+                      </td>
+                    ))}
+                    <td
+                      style={{
+                        textAlign: 'right',
+                        fontSize: 13,
+                        padding: '7px 16px',
+                        borderLeft: `1px solid ${C.border}`,
+                        color: C.muted,
+                      }}
+                    >
+                      {ytd == null ? DASH : fmtByUnit(ytd, row.unit)}
+                    </td>
+                  </tr>
+                </React.Fragment>
+              );
+            }
+
             // calc row
             return (
               <tr key={`c${ri}`} style={{ background: calcBg }}>
@@ -1851,8 +1894,6 @@ function TransactionsTab({ yearData, updateMetric, allYears, activeYear }) {
 // matching entry on the Transactions tab for the same month.
 const TX_CARD_MISMATCH =
   'This figure does not match the Top-up Cards entry on the Transactions tab.';
-const REV_CARD_MISMATCH =
-  'This figure does not match the card revenue line on the Costs & Revenue tab.';
 
 // By-market is a snapshot, not a time series: each country's figures are single
 // totals stored in the first month slot. Colours follow the table row order.
@@ -1941,7 +1982,6 @@ function CardsTab({ yearData, updateMetric, allYears, activeYear }) {
       unit: 'usdt',
       noBreak: true,
       info: 'The revenue generated via the top-up card redemptions this month.',
-      compare: { key: 'r_cardRedemptionFees', message: REV_CARD_MISMATCH },
     },
     {
       ...calc('Net Revenue', 'usdt', netRevenue, netRevY, 'The net value generated after deducting Cost of Sales from Gross Revenue.'),
@@ -2218,37 +2258,45 @@ function EmptyChart() {
 // ─────────────────────────────────────────────────────────────────────────────
 function RevenueTab({ yearData, updateMetric }) {
   const latest = latestMonthIndex(yearData);
-  const revKeys = ['r_transactionFees', 'r_cardRedemptionFees', 'r_other'];
-  const costKeys = ['cost_ambassador', 'cost_gasFees', 'cost_cardPrinting', 'cost_infrastructure', 'cost_marketingSpend'];
+  // Top-up card fee revenue is pulled from the Top-up Cards tab, not entered.
+  const topupRev = rawSeries(yearData, 'c_grossRevenue');
+  const revKeys = ['c_grossRevenue', 'r_offramps', 'r_other'];
+  const costKeys = ['cost_ambassador', 'cost_saas', 'cost_digitalMarketing', 'cost_campaigns'];
 
   const totalRev = sumSeries(yearData, revKeys);
   const totalCost = sumSeries(yearData, costKeys);
   const netRev = diffSeries(totalRev, totalCost);
-  const mau = rawSeries(yearData, 'u_mau');
-  const rpu = ratioSeries(totalRev, mau);
 
   const revY = seriesSum(totalRev, latest);
   const costY = seriesSum(totalCost, latest);
+  const netRevY = revY == null && costY == null ? null : (revY || 0) - (costY || 0);
 
   const rows = [
     { kind: 'subhead', label: 'Revenue' },
-    { kind: 'input', key: 'r_transactionFees', label: 'Transaction Fees', unit: 'usd' },
-    { kind: 'input', key: 'r_cardRedemptionFees', label: 'Card Redemption Fees', unit: 'usd' },
-    { kind: 'input', key: 'r_other', label: 'Other', unit: 'usd' },
-    calc('Total Revenue', 'usd', totalRev, revY, 'Sum of all revenue lines.'),
-    { kind: 'subhead', label: 'Costs' },
-    { kind: 'input', key: 'cost_ambassador', label: 'Ambassador Costs', unit: 'usd' },
-    { kind: 'input', key: 'cost_gasFees', label: 'Gas Fees', unit: 'usd' },
-    { kind: 'input', key: 'cost_cardPrinting', label: 'Card Printing', unit: 'usd' },
-    { kind: 'input', key: 'cost_infrastructure', label: 'Infrastructure', unit: 'usd' },
-    { kind: 'input', key: 'cost_marketingSpend', label: 'Marketing Spend', unit: 'usd' },
-    calc('Total Costs', 'usd', totalCost, costY, 'Sum of all cost lines.'),
-    calc('Net Revenue', 'usd', netRev, revY == null && costY == null ? null : (revY || 0) - (costY || 0), 'Total revenue − total costs.'),
-    calc('Revenue Per Active User', 'ratio', rpu, safeDiv(revY, valueAt(mau, latest)), 'Total revenue ÷ MAU (latest month for YTD).'),
+    {
+      kind: 'readonly',
+      label: 'Top-up Cards',
+      unit: 'usd',
+      values: topupRev,
+      info: 'Top-up card fee revenue, carried over automatically from the Top-up Cards tab.',
+    },
+    { kind: 'input', key: 'r_offramps', label: 'Off-ramps', unit: 'usd' },
+    { kind: 'input', key: 'r_other', label: 'Others', unit: 'usd' },
+    calc('Total Revenue', 'usd', totalRev, revY, 'The total revenue generated across all sources this month.'),
+    { kind: 'subhead', label: 'Cost of Revenue' },
+    { kind: 'input', key: 'cost_ambassador', label: 'Ambassador Salaries', unit: 'usd' },
+    { kind: 'input', key: 'cost_saas', label: 'SaaS Subscriptions', unit: 'usd' },
+    { kind: 'input', key: 'cost_digitalMarketing', label: 'Digital Marketing', unit: 'usd' },
+    { kind: 'input', key: 'cost_campaigns', label: 'Campaigns', unit: 'usd' },
+    calc('Cost of Revenue', 'usd', totalCost, costY, 'The total direct costs incurred this month.'),
+    { kind: 'subhead', label: 'Net Position' },
+    {
+      ...calc('Net Revenue', 'usd', netRev, netRevY, 'Revenue remaining after costs. Calculated as Total Revenue − Cost of Revenue.'),
+      negRed: true,
+    },
   ];
 
-  const rvc = monthChartData({ Revenue: totalRev, Costs: totalCost, 'Net Revenue': netRev });
-  const netData = monthChartData({ 'Net Revenue': netRev });
+  const rvc = monthChartData({ Revenue: totalRev, 'Cost of Revenue': totalCost });
 
   return (
     <div style={{ display: 'grid', gap: 16 }}>
@@ -2256,30 +2304,17 @@ function RevenueTab({ yearData, updateMetric }) {
         <TabTitle title="Costs & Revenue" accent={C.green} />
         <MetricTable yearData={yearData} rows={rows} updateMetric={updateMetric} />
       </Card>
-      <TwoCol>
-        <ChartCard title="Revenue vs Costs (with Net)" accent={C.green}>
-          <ComposedChart data={rvc} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
-            <CartesianGrid {...GRID} />
-            <XAxis {...X_AXIS} />
-            <YAxis {...yAxis()} />
-            <Tooltip content={<ChartTooltip fmt={fmtNumber} />} />
-            <Legend wrapperStyle={{ fontSize: 11 }} itemSorter={null} />
-            <Bar dataKey="Revenue" fill={C.green} barSize={18} radius={[4, 4, 0, 0]} />
-            <Bar dataKey="Costs" fill={C.red} barSize={18} radius={[4, 4, 0, 0]} />
-            <Line type="monotone" dataKey="Net Revenue" stroke={C.purple} strokeWidth={2} dot={false} connectNulls />
-          </ComposedChart>
-        </ChartCard>
-        <ChartCard title="Net Revenue" accent={C.green}>
-          <AreaChart data={netData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
-            {gradient('netRevGrad', C.green)}
-            <CartesianGrid {...GRID} />
-            <XAxis {...X_AXIS} />
-            <YAxis {...yAxis()} />
-            <Tooltip content={<ChartTooltip fmt={fmtNumber} />} />
-            <Area type="monotone" dataKey="Net Revenue" stroke={C.green} strokeWidth={2} fill="url(#netRevGrad)" connectNulls />
-          </AreaChart>
-        </ChartCard>
-      </TwoCol>
+      <ChartCard title="Revenue vs Costs" accent={C.green}>
+        <ComposedChart data={rvc} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+          <CartesianGrid {...GRID} />
+          <XAxis {...X_AXIS} />
+          <YAxis {...yAxis()} />
+          <Tooltip content={<ChartTooltip fmt={fmtNumber} />} />
+          <Legend wrapperStyle={{ fontSize: 11 }} itemSorter={null} />
+          <Bar dataKey="Revenue" fill={C.green} barSize={18} radius={[4, 4, 0, 0]} />
+          <Bar dataKey="Cost of Revenue" fill={C.red} barSize={18} radius={[4, 4, 0, 0]} />
+        </ComposedChart>
+      </ChartCard>
     </div>
   );
 }

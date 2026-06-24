@@ -226,19 +226,26 @@ export const METRIC_GROUPS = {
     {
       title: 'Revenue',
       metrics: [
+        { key: 'r_offramps', label: 'Off-ramps', unit: 'usd' },
+        { key: 'r_other', label: 'Others', unit: 'usd' },
+        // Retired revenue lines — kept so historical data loads. Top-up card
+        // revenue is now pulled from the Top-up Cards tab (c_grossRevenue).
         { key: 'r_transactionFees', label: 'Transaction Fees', unit: 'usd' },
         {
           key: 'r_cardRedemptionFees',
           label: 'Card Redemption Fees',
           unit: 'usd',
         },
-        { key: 'r_other', label: 'Other', unit: 'usd' },
       ],
     },
     {
-      title: 'Costs',
+      title: 'Cost of Revenue',
       metrics: [
-        { key: 'cost_ambassador', label: 'Ambassador Costs', unit: 'usd' },
+        { key: 'cost_ambassador', label: 'Ambassador Salaries', unit: 'usd' },
+        { key: 'cost_saas', label: 'SaaS Subscriptions', unit: 'usd' },
+        { key: 'cost_digitalMarketing', label: 'Digital Marketing', unit: 'usd' },
+        { key: 'cost_campaigns', label: 'Campaigns', unit: 'usd' },
+        // Retired cost lines — kept so historical data loads.
         { key: 'cost_gasFees', label: 'Gas Fees', unit: 'usd' },
         { key: 'cost_cardPrinting', label: 'Card Printing', unit: 'usd' },
         { key: 'cost_infrastructure', label: 'Infrastructure', unit: 'usd' },
