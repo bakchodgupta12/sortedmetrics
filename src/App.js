@@ -1534,9 +1534,13 @@ function ChartCard({ title, height = 240, children }) {
   );
 }
 
-function ChartTooltip({ active, payload, label, fmt }) {
+function ChartTooltip({ active, payload, label, fmt, reported }) {
   if (!active || !payload || !payload.length) return null;
   const f = fmt || fmtNumber;
+  const i = MONTHS.indexOf(label);
+  const upcoming = reported != null && reported >= 0 && i > reported;
+  // Hide the dashed "projection" duplicate series (keys ending in __up).
+  const rows = payload.filter((p) => !String(p.dataKey).endsWith('__up'));
   return (
     <div
       style={{
@@ -1549,11 +1553,15 @@ function ChartTooltip({ active, payload, label, fmt }) {
       }}
     >
       <div style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
-      {payload.map((p) => (
-        <div key={p.dataKey} style={{ color: p.color || p.stroke }}>
-          {p.name}: {p.value == null ? DASH : f(p.value)}
-        </div>
-      ))}
+      {upcoming ? (
+        <div style={{ color: C.muted }}>Not yet reported</div>
+      ) : (
+        rows.map((p) => (
+          <div key={p.dataKey} style={{ color: p.color || p.stroke }}>
+            {p.name}: {p.value == null ? DASH : f(p.value)}
+          </div>
+        ))
+      )}
     </div>
   );
 }
@@ -1564,6 +1572,40 @@ const monthChartData = (seriesMap) =>
     for (const [name, s] of Object.entries(seriesMap)) row[name] = s[i];
     return row;
   });
+
+// Like monthChartData, but splits each series into a solid part (through the
+// latest reported month) and a faded dashed "projection" part (`<name>__up`)
+// that holds the last reported value flat across the upcoming months.
+const monthChartDataSplit = (seriesMap, reported) =>
+  IDX.map((i) => {
+    const row = { m: MONTHS[i] };
+    for (const [name, s] of Object.entries(seriesMap)) {
+      row[name] = reported < 0 || i <= reported ? s[i] : null;
+      row[`${name}__up`] = reported >= 0 && i >= reported ? s[reported] : null;
+    }
+    return row;
+  });
+
+// Upcoming-months treatment shared by every monthly chart: a faint band over
+// the unreported region, a divider at the current-month boundary, and a small
+// "Upcoming" label. Returns chart children (or null when the year is complete).
+const UPCOMING_BAND = 'rgba(0,17,168,0.04)';
+const UPCOMING_DIVIDER = '#d9d5cc';
+const UPCOMING_LABEL = '#9a9aa4';
+function upcomingRefs(reported) {
+  if (reported == null || reported < 0 || reported >= 11) return null;
+  return [
+    <ReferenceArea
+      key="up-band"
+      x1={MONTHS[reported]}
+      x2={MONTHS[11]}
+      fill={UPCOMING_BAND}
+      stroke="none"
+      label={{ value: 'Upcoming', position: 'insideTopLeft', fontSize: 11, fill: UPCOMING_LABEL }}
+    />,
+    <ReferenceLine key="up-div" x={MONTHS[reported]} stroke={UPCOMING_DIVIDER} strokeWidth={1} />,
+  ];
+}
 
 function gradient(id, color) {
   return (
@@ -1662,8 +1704,9 @@ function DownloadsTab({ yearData, updateMetric, allYears, activeYear }) {
     ),
   ];
 
-  const storeData = monthChartData(
-    Object.fromEntries(STORE_KEYS.map(([key, label]) => [label, rawSeries(yearData, key)]))
+  const storeData = monthChartDataSplit(
+    Object.fromEntries(STORE_KEYS.map(([key, label]) => [label, rawSeries(yearData, key)])),
+    latest
   );
 
   return (
@@ -1674,22 +1717,35 @@ function DownloadsTab({ yearData, updateMetric, allYears, activeYear }) {
       </Card>
       <ChartCard title="Installs by Store" accent={C.blue}>
         <LineChart data={storeData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+          {upcomingRefs(latest)}
           <CartesianGrid {...GRID} />
           <XAxis {...X_AXIS} />
           <YAxis {...yAxis()} />
-          <Tooltip content={<ChartTooltip fmt={fmtNumber} />} />
+          <Tooltip content={<ChartTooltip fmt={fmtNumber} reported={latest} />} />
           <Legend wrapperStyle={{ fontSize: 11 }} itemSorter={null} />
-          {STORE_KEYS.map(([key, label, color]) => (
+          {STORE_KEYS.flatMap(([key, label, color]) => [
             <Line
-              key={key}
+              key={label}
               type="monotone"
               dataKey={label}
               stroke={color}
               strokeWidth={2}
               dot={false}
               connectNulls
-            />
-          ))}
+            />,
+            <Line
+              key={`${label}__up`}
+              type="monotone"
+              dataKey={`${label}__up`}
+              stroke={color}
+              strokeOpacity={0.4}
+              strokeWidth={2}
+              strokeDasharray="6 6"
+              dot={false}
+              connectNulls
+              legendType="none"
+            />,
+          ])}
         </LineChart>
       </ChartCard>
     </div>
@@ -1839,10 +1895,11 @@ function TransactionsTab({ yearData, updateMetric, allYears, activeYear }) {
       </Card>
       <ChartCard title="Transaction Volume by Category" accent={C.amber}>
         <ComposedChart data={volData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+          {upcomingRefs(latest)}
           <CartesianGrid {...GRID} />
           <XAxis {...X_AXIS} />
           <YAxis {...yAxis()} yAxisId="left" />
-          <Tooltip content={<ChartTooltip fmt={fmtUSDT} />} />
+          <Tooltip content={<ChartTooltip fmt={fmtUSDT} reported={latest} />} />
           <Legend wrapperStyle={{ fontSize: 11 }} itemSorter={null} />
           <Bar yAxisId="left" dataKey="Send" stackId="v" fill={C.amber} barSize={20} />
           <Bar yAxisId="left" dataKey="Receive" stackId="v" fill={C.green} barSize={20} />
@@ -1959,7 +2016,7 @@ function CardsTab({ yearData, updateMetric, allYears, activeYear }) {
 
   // Charts: monthly activity on a dual axis (cards vs users differ by orders of
   // magnitude), and the by-country snapshot.
-  const activityChart = monthChartData({ 'Cards Sold': sold, 'Unique Users': uniqueUsers });
+  const activityChart = monthChartDataSplit({ 'Cards Sold': sold, 'Unique Users': uniqueUsers }, latest);
   const countryTotals = MARKETS.map((mk) => ({
     name: mk.name,
     value: getVal(yearData, mk.sold, SNAP_IDX) || 0,
@@ -1991,14 +2048,27 @@ function CardsTab({ yearData, updateMetric, allYears, activeYear }) {
       <TwoCol>
         <ChartCard title="Cards Sold & Unique Users" accent={C.purple}>
           <ComposedChart data={activityChart} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+            {upcomingRefs(latest)}
             <CartesianGrid {...GRID} />
             <XAxis {...X_AXIS} />
             <YAxis {...yAxis()} yAxisId="left" />
             <YAxis {...yAxis({ orientation: 'right' })} yAxisId="right" />
-            <Tooltip content={<ChartTooltip fmt={fmtNumber} />} />
+            <Tooltip content={<ChartTooltip fmt={fmtNumber} reported={latest} />} />
             <Legend wrapperStyle={{ fontSize: 11 }} itemSorter={null} />
             <Bar yAxisId="left" dataKey="Cards Sold" fill={C.purple} barSize={18} radius={[4, 4, 0, 0]} />
             <Line yAxisId="right" type="monotone" dataKey="Unique Users" stroke={C.blue} strokeWidth={2} dot={false} connectNulls />
+            <Line
+              yAxisId="right"
+              type="monotone"
+              dataKey="Unique Users__up"
+              stroke={C.blue}
+              strokeOpacity={0.4}
+              strokeWidth={2}
+              strokeDasharray="6 6"
+              dot={false}
+              connectNulls
+              legendType="none"
+            />
           </ComposedChart>
         </ChartCard>
         <ChartCard title="Cards Sold by Country" accent={C.purple}>
@@ -2274,10 +2344,11 @@ function RevenueTab({ yearData, updateMetric }) {
       </Card>
       <ChartCard title="Revenue vs Costs" accent={C.green}>
         <ComposedChart data={rvc} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+          {upcomingRefs(latest)}
           <CartesianGrid {...GRID} />
           <XAxis {...X_AXIS} />
           <YAxis {...yAxis()} />
-          <Tooltip content={<ChartTooltip fmt={fmtNumber} />} />
+          <Tooltip content={<ChartTooltip fmt={fmtNumber} reported={latest} />} />
           <Legend wrapperStyle={{ fontSize: 11 }} itemSorter={null} />
           <Bar dataKey="Revenue" fill={C.green} barSize={18} radius={[4, 4, 0, 0]} />
           <Bar dataKey="Cost of Revenue" fill={C.red} barSize={18} radius={[4, 4, 0, 0]} />
@@ -2928,7 +2999,7 @@ function DashboardTab({ allYears }) {
             <span>
               <span style={{ color: C.primary }}>●</span> Active Users
             </span>
-            <span style={{ color: C.gray400 }}>▦ Upcoming</span>
+            <span style={{ color: UPCOMING_LABEL }}>▦ Upcoming</span>
           </div>
         </div>
         {reported < 0 ? (
@@ -2939,9 +3010,15 @@ function DashboardTab({ allYears }) {
               {gradient('dashTrendInstalls', C.green)}
               <CartesianGrid {...GRID} />
               {reported < 11 && (
-                <ReferenceArea x1={MONTHS[reported]} x2={MONTHS[11]} fill="rgba(0,17,168,0.04)" stroke="none" />
+                <ReferenceArea
+                  x1={MONTHS[reported]}
+                  x2={MONTHS[11]}
+                  fill={UPCOMING_BAND}
+                  stroke="none"
+                  label={{ value: 'Upcoming', position: 'insideTopLeft', fontSize: 11, fill: UPCOMING_LABEL }}
+                />
               )}
-              {reported < 11 && <ReferenceLine x={MONTHS[reported]} stroke={C.gray400} />}
+              {reported < 11 && <ReferenceLine x={MONTHS[reported]} stroke={UPCOMING_DIVIDER} strokeWidth={1} />}
               <XAxis dataKey="m" tickLine={false} axisLine={false} interval={0} tick={renderMonthTick} />
               <YAxis yAxisId="left" hide />
               <YAxis yAxisId="right" orientation="right" hide />
@@ -2965,7 +3042,7 @@ function DashboardTab({ allYears }) {
                 type="monotone"
                 dataKey="installsDash"
                 stroke={C.green}
-                strokeOpacity={0.5}
+                strokeOpacity={0.4}
                 strokeWidth={2}
                 strokeDasharray="6 6"
                 dot={false}
@@ -2985,7 +3062,7 @@ function DashboardTab({ allYears }) {
                 type="monotone"
                 dataKey="usersDash"
                 stroke={C.primary}
-                strokeOpacity={0.45}
+                strokeOpacity={0.4}
                 strokeWidth={2}
                 strokeDasharray="6 6"
                 dot={false}
