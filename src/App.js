@@ -73,6 +73,12 @@ export function fmtPercent(v) {
   return `${v.toFixed(1)}%`;
 }
 
+// 2-decimal percent — used for conversion rates (e.g. 69.50%).
+export function fmtPercent2(v) {
+  if (!isNum(v)) return DASH;
+  return `${v.toFixed(2)}%`;
+}
+
 export function fmtUSDT(v) {
   if (!isNum(v)) return DASH;
   if (Math.abs(v) >= 1_000_000) return compact(v);
@@ -887,6 +893,8 @@ function fmtByUnit(v, unit) {
       return withDollar(fmtNumber(v));
     case 'percent':
       return fmtPercent(v);
+    case 'percent2':
+      return fmtPercent2(v);
     case 'ratio':
       if (!isNum(v)) return DASH;
       return withDollar(
@@ -1186,6 +1194,10 @@ const thBase = {
   whiteSpace: 'nowrap',
 };
 
+// Subtle translucent grey for future/unentered month columns. Translucent so it
+// darkens both white input rows and the grey calc rows consistently.
+const FUTURE_BG = 'rgba(123, 125, 132, 0.08)';
+
 // Whitespace + a thin rule that separates a calculated block from the next
 // section, so groups don't run straight into one another.
 function DividerRow() {
@@ -1206,6 +1218,9 @@ function SectionDivider() {
 
 function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD' }) {
   const latest = latestMonthIndex(yearData);
+  // Months after the latest one with data are "not yet entered" — greyed out.
+  // Dynamic: as new months are filled, `latest` advances and the band shrinks.
+  const isFuture = (i) => latest >= 0 && i > latest;
   // Calculated rows get a subtle brand-gray tint (not an accent fill).
   const calcBg = C.gray200;
   const calcLabelBg = C.gray200;
@@ -1241,15 +1256,24 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD' }) {
                 background: C.card,
               }}
             />
-            {MONTHS.map((m) => (
-              <th key={m} style={thBase}>
+            {MONTHS.map((m, i) => (
+              <th
+                key={m}
+                style={isFuture(i) ? { ...thBase, background: FUTURE_BG, color: C.gray400 } : thBase}
+              >
                 {m}
               </th>
             ))}
             <th
               style={{
                 ...thBase,
-                paddingRight: 22,
+                // Reserve a dedicated width: under table-layout:fixed the total
+                // column otherwise shares a month column's narrow width, so the
+                // (largest) total values overflow it and padding-right can't
+                // create visible spacing. A fixed width lets the value sit
+                // inside the cell with its right padding showing.
+                width: 110,
+                paddingRight: 16,
                 borderLeft: `1px solid ${C.border}`,
               }}
             >
@@ -1328,7 +1352,7 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD' }) {
                           style={{
                             textAlign: 'right',
                             padding: '4px 6px',
-                            background: mismatch ? C.redBg : undefined,
+                            background: mismatch ? C.redBg : isFuture(i) ? FUTURE_BG : undefined,
                           }}
                         >
                           <Cell
@@ -1343,7 +1367,7 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD' }) {
                       style={{
                         textAlign: 'right',
                         fontSize: 13,
-                        padding: '7px 22px',
+                        padding: '7px 16px',
                         borderLeft: `1px solid ${C.border}`,
                         color: C.muted,
                       }}
@@ -1382,7 +1406,16 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD' }) {
                       {row.info && <InfoTip text={row.info} />}
                     </td>
                     {MONTHS.map((m, i) => (
-                      <td key={m} style={{ textAlign: 'right', padding: '7px 10px', fontSize: 13, color: C.muted }}>
+                      <td
+                        key={m}
+                        style={{
+                          textAlign: 'right',
+                          padding: '7px 10px',
+                          fontSize: 13,
+                          color: C.muted,
+                          background: isFuture(i) ? FUTURE_BG : undefined,
+                        }}
+                      >
                         {row.values[i] == null ? DASH : fmtByUnit(row.values[i], row.unit)}
                       </td>
                     ))}
@@ -1390,7 +1423,7 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD' }) {
                       style={{
                         textAlign: 'right',
                         fontSize: 13,
-                        padding: '7px 22px',
+                        padding: '7px 16px',
                         borderLeft: `1px solid ${C.border}`,
                         color: C.muted,
                       }}
@@ -1429,6 +1462,7 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD' }) {
                       fontWeight: 600,
                       padding: '9px 10px',
                       color: row.negRed && isNum(v) && v < 0 ? C.red : undefined,
+                      background: isFuture(i) ? FUTURE_BG : undefined,
                     }}
                   >
                     {v == null ? DASH : fmtByUnit(v, row.unit)}
@@ -1439,7 +1473,7 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD' }) {
                     textAlign: 'right',
                     fontSize: 13,
                     fontWeight: 700,
-                    padding: '9px 22px',
+                    padding: '9px 16px',
                     borderLeft: `1px solid ${C.border}`,
                     color: row.negRed && isNum(row.ytd) && row.ytd < 0 ? C.red : undefined,
                   }}
@@ -1607,14 +1641,14 @@ function DownloadsTab({ yearData, updateMetric, allYears, activeYear }) {
     { kind: 'subhead', label: 'User Conversion Rate' },
     calc(
       'Monthly',
-      'percent',
+      'percent2',
       conversion,
       pct(nuY, ndY),
       'The rate at which new installs converted to users this month (new users this month ÷ new installs this month).'
     ),
     calc(
       'Overall',
-      'percent',
+      'percent2',
       cumConversion,
       pct(lifeUsers, lifeInstalls),
       'The rate at which all-time installs have converted into registered users (total users ÷ total installs).'
@@ -2566,7 +2600,8 @@ function DashboardTab({ allYears }) {
     if (kpi.type === 'ratio') {
       const n = sumKeysOver(allYears, kpi.num, periods);
       const d = sumKeysOver(allYears, kpi.den, periods);
-      return kpi.unit === 'percent' ? pct(n, d) : safeDiv(n, d);
+      const isPct = kpi.unit === 'percent' || kpi.unit === 'percent2';
+      return isPct ? pct(n, d) : safeDiv(n, d);
     }
     return pointInTimeOver(allYears, kpi.key, periods); // point-in-time
   };
@@ -2579,7 +2614,7 @@ function DashboardTab({ allYears }) {
     { label: 'New Users', type: 'additive', keys: ['u_newUsers'], unit: 'count' },
     { label: 'Transactions', type: 'additive', keys: countKeys, unit: 'count' },
     { label: 'Revenue', type: 'additive', keys: revKeys, unit: 'usd' },
-    { label: 'Install → User Conversion', type: 'ratio', num: ['u_newUsers'], den: storeKeys, unit: 'percent' },
+    { label: 'Install → User Conversion', type: 'ratio', num: ['u_newUsers'], den: storeKeys, unit: 'percent2' },
     { label: 'Avg Transaction Value', type: 'ratio', num: valueKeys, den: countKeys, unit: 'usdt' },
     { label: 'MAU', type: 'point', key: 'u_mau', unit: 'count' },
     { label: 'DAU', type: 'point', key: 'u_dau', unit: 'count' },
