@@ -1249,7 +1249,7 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD' }) {
             <th
               style={{
                 ...thBase,
-                paddingRight: 16,
+                paddingRight: 22,
                 borderLeft: `1px solid ${C.border}`,
               }}
             >
@@ -1343,7 +1343,7 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD' }) {
                       style={{
                         textAlign: 'right',
                         fontSize: 13,
-                        padding: '7px 16px',
+                        padding: '7px 22px',
                         borderLeft: `1px solid ${C.border}`,
                         color: C.muted,
                       }}
@@ -1390,7 +1390,7 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD' }) {
                       style={{
                         textAlign: 'right',
                         fontSize: 13,
-                        padding: '7px 16px',
+                        padding: '7px 22px',
                         borderLeft: `1px solid ${C.border}`,
                         color: C.muted,
                       }}
@@ -1439,7 +1439,7 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD' }) {
                     textAlign: 'right',
                     fontSize: 13,
                     fontWeight: 700,
-                    padding: '9px 16px',
+                    padding: '9px 22px',
                     borderLeft: `1px solid ${C.border}`,
                     color: row.negRed && isNum(row.ytd) && row.ytd < 0 ? C.red : undefined,
                   }}
@@ -2365,54 +2365,314 @@ function KpiCard({ label, value }) {
   );
 }
 
-function DashboardTab({ yearData, activeYear }) {
-  const latest = latestMonthIndex(yearData);
+// ─────────────────────────────────────────────────────────────────────────────
+// Dashboard range helpers — operate across ALL years (a range may span years),
+// independent of the top-right year dropdown.
+// ─────────────────────────────────────────────────────────────────────────────
+const PERIOD = (y, m) => y * 12 + m;
+const toPeriod = (idx) => ({ y: Math.floor(idx / 12), m: ((idx % 12) + 12) % 12 });
+const addMonths = (p, n) => toPeriod(PERIOD(p.y, p.m) + n);
+const fmtPeriod = (p) => `${MONTHS[p.m]} ${p.y}`;
+
+function parseMonthInput(s) {
+  if (!s) return null;
+  const [y, m] = String(s).split('-').map(Number);
+  if (!y || !m) return null;
+  return { y, m: m - 1 };
+}
+const toMonthInput = (p) => (p ? `${p.y}-${String(p.m + 1).padStart(2, '0')}` : '');
+
+function periodHasAnyData(allYears, y, m) {
+  const yd = allYears[String(y)];
+  if (!yd) return false;
+  for (const k of Object.keys(yd)) {
+    if (k === 'notes') continue;
+    if (isNum(yd[k]?.[MONTHS[m]])) return true;
+  }
+  return false;
+}
+
+function dataExtent(allYears) {
+  let earliest = null;
+  let latest = null;
+  for (const yStr of Object.keys(allYears)) {
+    const y = Number(yStr);
+    if (Number.isNaN(y)) continue;
+    for (let m = 0; m < 12; m++) {
+      if (!periodHasAnyData(allYears, y, m)) continue;
+      const idx = PERIOD(y, m);
+      if (earliest == null || idx < PERIOD(earliest.y, earliest.m)) earliest = { y, m };
+      if (latest == null || idx > PERIOD(latest.y, latest.m)) latest = { y, m };
+    }
+  }
+  return { earliest, latest };
+}
+
+function periodsBetween(from, to) {
+  const out = [];
+  for (let p = PERIOD(from.y, from.m); p <= PERIOD(to.y, to.m); p++) out.push(toPeriod(p));
+  return out;
+}
+
+// Latest completed month = current calendar month − 1, falling back to the most
+// recent earlier month that actually has data.
+function latestCompletedPeriod(allYears) {
+  const now = new Date();
+  const start = addMonths({ y: now.getFullYear(), m: now.getMonth() }, -1);
+  let p = start;
+  for (let i = 0; i < 600; i++) {
+    if (periodHasAnyData(allYears, p.y, p.m)) return p;
+    p = addMonths(p, -1);
+  }
+  return start;
+}
+
+function sumKeysAt(allYears, keys, p) {
+  let s = 0;
+  let any = false;
+  for (const k of keys) {
+    const v = getVal(allYears[String(p.y)], k, p.m);
+    if (v != null) {
+      s += v;
+      any = true;
+    }
+  }
+  return any ? s : null;
+}
+
+function sumKeysOver(allYears, keys, periods) {
+  let s = 0;
+  let any = false;
+  for (const p of periods) {
+    const v = sumKeysAt(allYears, keys, p);
+    if (v != null) {
+      s += v;
+      any = true;
+    }
+  }
+  return any ? s : null;
+}
+
+// Lifetime cumulative of `keys` from the earliest data through `end` inclusive.
+function lifetimeThrough(allYears, keys, end) {
+  if (!end) return null;
+  const endIdx = PERIOD(end.y, end.m);
+  let s = 0;
+  let any = false;
+  for (const yStr of Object.keys(allYears)) {
+    const y = Number(yStr);
+    if (Number.isNaN(y)) continue;
+    for (let m = 0; m < 12; m++) {
+      if (PERIOD(y, m) > endIdx) continue;
+      const v = sumKeysAt(allYears, keys, { y, m });
+      if (v != null) {
+        s += v;
+        any = true;
+      }
+    }
+  }
+  return any ? s : null;
+}
+
+// Point-in-time aggregation (MAU/DAU) over a multi-month range is provisional.
+// Change this one function to refine the rule later (e.g. 'last' or 'max').
+const POINT_IN_TIME_AGG = 'avg';
+function aggregatePointInTime(values) {
+  if (!values.length) return null;
+  if (POINT_IN_TIME_AGG === 'last') return values[values.length - 1];
+  if (POINT_IN_TIME_AGG === 'max') return Math.max(...values);
+  return values.reduce((a, b) => a + b, 0) / values.length; // 'avg'
+}
+function pointInTimeOver(allYears, key, periods) {
+  const vals = [];
+  for (const p of periods) {
+    const v = getVal(allYears[String(p.y)], key, p.m);
+    if (v != null) vals.push(v);
+  }
+  return aggregatePointInTime(vals);
+}
+
+const DASH_PRESETS = [
+  ['default', 'Default'],
+  ['thisMonth', 'This Month'],
+  ['last3', 'Last 3 Months'],
+  ['last6', 'Last 6 Months'],
+  ['ytd', 'YTD'],
+  ['fullYear', 'Full Year'],
+  ['allTime', 'All Time'],
+];
+
+function buildPresetRanges(allYears) {
+  const now = new Date();
+  const y0 = now.getFullYear();
+  const m0 = now.getMonth();
+  const lc = addMonths({ y: y0, m: m0 }, -1);
+  const ext = dataExtent(allYears);
+  return {
+    thisMonth: { from: { y: y0, m: m0 }, to: { y: y0, m: m0 } },
+    last3: { from: addMonths(lc, -2), to: lc },
+    last6: { from: addMonths(lc, -5), to: lc },
+    ytd: { from: { y: y0, m: 0 }, to: { y: y0, m: m0 } },
+    fullYear: { from: { y: y0, m: 0 }, to: { y: y0, m: 11 } },
+    allTime: ext.earliest && ext.latest ? { from: ext.earliest, to: ext.latest } : null,
+  };
+}
+
+function DashboardTab({ allYears }) {
   const storeKeys = STORE_KEYS.map((s) => s[0]);
   const countKeys = ['tx_sendP2P', 'tx_receiveP2P', 'tx_cashOut', 'tx_cardRedemption', 'tx_other'];
   const valueKeys = ['tx_sendVolume', 'tx_receiveVolume', 'tx_cashOutVolume', 'tx_cardRedemptionVolume', 'tx_otherVolume'];
+  const revKeys = ['c_grossRevenue', 'r_offramps', 'r_other'];
 
-  const newDownloads = sumSeries(yearData, storeKeys);
-  const newUsers = rawSeries(yearData, 'u_newUsers');
-  const mau = rawSeries(yearData, 'u_mau');
-  const totalTx = sumSeries(yearData, countKeys);
-  const totalVol = sumSeries(yearData, valueKeys);
+  const presets = useMemo(() => buildPresetRanges(allYears), [allYears]);
+  const defaultPeriod = useMemo(() => latestCompletedPeriod(allYears), [allYears]);
+  const allTimeEnd = useMemo(() => dataExtent(allYears).latest, [allYears]);
 
-  const kpis = [
-    { label: 'Total Installs YTD', value: fmtNumber(seriesSum(newDownloads, latest)), accent: C.blue },
-    { label: 'New Users YTD', value: fmtNumber(seriesSum(newUsers, latest)), accent: C.green },
-    { label: 'MAU (latest month)', value: fmtNumber(valueAt(mau, latest)), accent: C.blue },
-    { label: 'Total Transactions YTD', value: fmtNumber(seriesSum(totalTx, latest)), accent: C.amber },
-    { label: 'Cards Sold YTD', value: fmtNumber(seriesSum(rawSeries(yearData, 'c_sold'), latest)), accent: C.purple },
-    { label: 'Cards Redeemed YTD', value: fmtNumber(seriesSum(rawSeries(yearData, 'c_redeemed'), latest)), accent: C.purple },
-    {
-      label: 'Install → User Conversion (latest)',
-      value: fmtPercent(pct(valueAt(newUsers, latest), valueAt(newDownloads, latest))),
-      accent: C.blue,
-    },
-    {
-      label: 'Avg Transaction Value USDT (latest)',
-      value: fmtByUnit(safeDiv(valueAt(totalVol, latest), valueAt(totalTx, latest)), 'usdt'),
-      accent: C.amber,
-    },
+  const [sel, setSel] = useState('default'); // preset key | 'custom' | 'default'
+  const [customFrom, setCustomFrom] = useState(() => toMonthInput(latestCompletedPeriod(allYears)));
+  const [customTo, setCustomTo] = useState(() => toMonthInput(latestCompletedPeriod(allYears)));
+
+  // Resolve the active range. null === default behaviour.
+  let range = null;
+  if (sel === 'custom') {
+    const f = parseMonthInput(customFrom);
+    const t = parseMonthInput(customTo);
+    if (f && t) {
+      range = PERIOD(f.y, f.m) <= PERIOD(t.y, t.m) ? { from: f, to: t } : { from: t, to: f };
+    }
+  } else if (sel !== 'default') {
+    range = presets[sel] || null;
+  }
+
+  const selectPreset = (key) => {
+    setSel(key);
+    const r = key === 'default' ? { from: defaultPeriod, to: defaultPeriod } : presets[key];
+    if (r) {
+      setCustomFrom(toMonthInput(r.from));
+      setCustomTo(toMonthInput(r.to));
+    }
+  };
+
+  const periods = range ? periodsBetween(range.from, range.to) : [defaultPeriod];
+  const multiMonth = periods.length > 1;
+
+  const kpiValue = (kpi) => {
+    if (kpi.type === 'lifetime') {
+      return lifetimeThrough(allYears, kpi.keys, range ? range.to : allTimeEnd);
+    }
+    if (kpi.type === 'additive') {
+      return sumKeysOver(allYears, kpi.keys, periods);
+    }
+    if (kpi.type === 'ratio') {
+      const n = sumKeysOver(allYears, kpi.num, periods);
+      const d = sumKeysOver(allYears, kpi.den, periods);
+      return kpi.unit === 'percent' ? pct(n, d) : safeDiv(n, d);
+    }
+    return pointInTimeOver(allYears, kpi.key, periods); // point-in-time
+  };
+
+  const kpiDefs = [
+    { label: 'Total Installs', type: 'lifetime', keys: storeKeys, unit: 'count' },
+    { label: 'Total Users', type: 'lifetime', keys: ['u_newUsers'], unit: 'count' },
+    { label: 'Total Top-up Cards Sold', type: 'lifetime', keys: ['c_sold'], unit: 'count' },
+    { label: 'New Installs', type: 'additive', keys: storeKeys, unit: 'count' },
+    { label: 'New Users', type: 'additive', keys: ['u_newUsers'], unit: 'count' },
+    { label: 'Transactions', type: 'additive', keys: countKeys, unit: 'count' },
+    { label: 'Revenue', type: 'additive', keys: revKeys, unit: 'usd' },
+    { label: 'Install → User Conversion', type: 'ratio', num: ['u_newUsers'], den: storeKeys, unit: 'percent' },
+    { label: 'Avg Transaction Value', type: 'ratio', num: valueKeys, den: countKeys, unit: 'usdt' },
+    { label: 'MAU', type: 'point', key: 'u_mau', unit: 'count' },
+    { label: 'DAU', type: 'point', key: 'u_dau', unit: 'count' },
   ];
 
-  const downloadsData = monthChartData({ Installs: newDownloads });
-  const mauData = monthChartData({ MAU: mau });
-  const volData = monthChartData({ Volume: totalVol });
+  const kpis = kpiDefs.map((kpi) => {
+    const pointSuffix = kpi.type === 'point' && multiMonth ? ` (${POINT_IN_TIME_AGG})` : '';
+    return { label: kpi.label + pointSuffix, value: fmtByUnit(kpiValue(kpi), kpi.unit) };
+  });
+
+  // Charts follow the range; default to the current calendar year.
+  const now = new Date();
+  const chartPeriods = range
+    ? periods
+    : periodsBetween({ y: now.getFullYear(), m: 0 }, { y: now.getFullYear(), m: 11 });
+  const spanYears =
+    chartPeriods.length > 0 && chartPeriods[0].y !== chartPeriods[chartPeriods.length - 1].y;
+  const labelOf = (p) => (spanYears ? `${MONTHS[p.m]} '${String(p.y).slice(2)}` : MONTHS[p.m]);
+  const installsData = chartPeriods.map((p) => ({ m: labelOf(p), Installs: sumKeysAt(allYears, storeKeys, p) }));
+  const mauData = chartPeriods.map((p) => ({ m: labelOf(p), MAU: getVal(allYears[String(p.y)], 'u_mau', p.m) }));
+  const volData = chartPeriods.map((p) => ({ m: labelOf(p), Volume: sumKeysAt(allYears, valueKeys, p) }));
+
+  const caption = range
+    ? PERIOD(range.from.y, range.from.m) === PERIOD(range.to.y, range.to.m)
+      ? fmtPeriod(range.from)
+      : `${fmtPeriod(range.from)} – ${fmtPeriod(range.to)}`
+    : `Latest month: ${fmtPeriod(defaultPeriod)} · lifetime totals all-time`;
+
+  const pillStyle = (active) => ({
+    border: `1px solid ${active ? C.primary : C.border}`,
+    background: active ? C.primary : '#fff',
+    color: active ? '#fff' : C.text,
+    borderRadius: 999,
+    padding: '6px 12px',
+    fontSize: 12,
+    fontWeight: 600,
+    cursor: 'pointer',
+    whiteSpace: 'nowrap',
+  });
+  const monthInput = {
+    border: `1px solid ${C.border}`,
+    borderRadius: 8,
+    padding: '6px 10px',
+    fontSize: 12,
+    fontFamily: 'inherit',
+    color: C.text,
+    background: '#fff',
+  };
 
   return (
     <div style={{ display: 'grid', gap: 16 }}>
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 12,
-        }}
-      >
-        <h2 style={{ fontSize: 18 }}>Dashboard · {activeYear}</h2>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <div>
+          <h2 style={{ fontSize: 18 }}>Dashboard</h2>
+          <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>{caption}</div>
+        </div>
         <div style={{ flex: 1 }} />
         <DownloadButton label="Download all" />
       </div>
+
+      <Card accent={C.primary} style={{ padding: 14 }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
+          {DASH_PRESETS.map(([key, label]) => {
+            if (key === 'allTime' && !presets.allTime) return null;
+            return (
+              <button key={key} style={pillStyle(sel === key)} onClick={() => selectPreset(key)}>
+                {label}
+              </button>
+            );
+          })}
+          <div style={{ width: 1, height: 22, background: C.border, margin: '0 4px' }} />
+          <span style={{ fontSize: 12, color: C.muted }}>From</span>
+          <input
+            type="month"
+            style={monthInput}
+            value={customFrom}
+            onChange={(e) => {
+              setCustomFrom(e.target.value);
+              setSel('custom');
+            }}
+          />
+          <span style={{ fontSize: 12, color: C.muted }}>To</span>
+          <input
+            type="month"
+            style={monthInput}
+            value={customTo}
+            onChange={(e) => {
+              setCustomTo(e.target.value);
+              setSel('custom');
+            }}
+          />
+        </div>
+      </Card>
 
       <div
         style={{
@@ -2427,8 +2687,8 @@ function DashboardTab({ yearData, activeYear }) {
       </div>
 
       <TwoCol>
-        <ChartCard title="Monthly Installs" accent={C.green}>
-          <AreaChart data={downloadsData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+        <ChartCard title="Installs" accent={C.green}>
+          <AreaChart data={installsData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
             {gradient('dashDownloads', C.green)}
             <CartesianGrid {...GRID} />
             <XAxis {...X_AXIS} />
@@ -2449,7 +2709,7 @@ function DashboardTab({ yearData, activeYear }) {
         </ChartCard>
       </TwoCol>
 
-      <ChartCard title="Total Transaction Volume (USDT)" accent={C.amber} height={260}>
+      <ChartCard title="Transaction Volume (USDT)" accent={C.amber} height={260}>
         <AreaChart data={volData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
           {gradient('dashVol', C.amber)}
           <CartesianGrid {...GRID} />
@@ -2493,9 +2753,7 @@ function TabContent({
       return <SettingsTab user={user} setUser={setUser} canEdit={canEdit} />;
     case 'Dashboard':
     default:
-      return (
-        <DashboardTab yearData={yearData} activeYear={activeYear} />
-      );
+      return <DashboardTab allYears={allYears} />;
   }
 }
 
