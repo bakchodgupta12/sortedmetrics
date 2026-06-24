@@ -2,7 +2,6 @@ import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } 
 import { createPortal } from 'react-dom';
 import {
   Area,
-  AreaChart,
   Bar,
   CartesianGrid,
   Cell as RCell,
@@ -12,6 +11,8 @@ import {
   LineChart,
   Pie,
   PieChart,
+  ReferenceArea,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -2371,31 +2372,112 @@ function TabTitle({ title, accent, downloadLabel }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Dashboard tab
 // ─────────────────────────────────────────────────────────────────────────────
-function KpiCard({ label, value }) {
+// ── Editorial dashboard pieces (Exec at-a-glance styling) ───────────────────
+const DASH_KPI_LABEL = {
+  fontSize: 11,
+  fontWeight: 600,
+  letterSpacing: '0.6px',
+  textTransform: 'uppercase',
+  color: C.muted,
+};
+
+// Small ▲/▼ delta token. Up is "good" (green) for every dashboard metric here;
+// down is red. `none` renders a muted dash when there's nothing to compare to.
+function DeltaToken({ delta, size = 12 }) {
+  if (!delta || delta.dir === 'none' || !delta.text) {
+    return <span style={{ fontSize: size, color: C.gray400 }}>—</span>;
+  }
   return (
-    <Card accent={C.primary} style={{ padding: 16 }}>
-      <div
-        style={{
-          fontSize: 10,
-          fontWeight: 500,
-          letterSpacing: '0.08em',
-          textTransform: 'uppercase',
-          color: C.muted,
-        }}
-      >
-        {label}
-      </div>
+    <span
+      style={{
+        fontSize: size,
+        fontWeight: 700,
+        color: delta.dir === 'up' ? C.green : C.red,
+        whiteSpace: 'nowrap',
+      }}
+    >
+      {delta.text}
+    </span>
+  );
+}
+
+// Hero metric: large headline value + delta token + muted comparison line.
+function HeroMetric({ label, value, delta, compare, divider }) {
+  return (
+    <div style={{ padding: '24px 26px', borderRight: divider ? `1px solid ${C.border}` : undefined, minWidth: 0 }}>
+      <div style={DASH_KPI_LABEL}>{label}</div>
       <div
         style={{
           fontFamily: 'var(--font-head)',
-          fontSize: 26,
-          fontWeight: 600,
+          fontWeight: 700,
+          fontSize: 42,
+          letterSpacing: '-1.5px',
+          lineHeight: 1,
           marginTop: 6,
+          color: C.text,
+          fontVariantNumeric: 'tabular-nums',
         }}
       >
         {value}
       </div>
-    </Card>
+      <div style={{ marginTop: 12, display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
+        <DeltaToken delta={delta} size={12.5} />
+        {compare && <span style={{ fontSize: 12.5, color: C.muted }}>{compare}</span>}
+      </div>
+    </div>
+  );
+}
+
+// Secondary metric: smaller card, value + inline delta token.
+function StatCard({ label, value, delta }) {
+  return (
+    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: '15px 18px' }}>
+      <div style={{ ...DASH_KPI_LABEL, fontSize: 10.5, letterSpacing: '0.5px' }}>{label}</div>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 6 }}>
+        <span
+          style={{
+            fontFamily: 'var(--font-head)',
+            fontWeight: 700,
+            fontSize: 24,
+            color: C.text,
+            fontVariantNumeric: 'tabular-nums',
+          }}
+        >
+          {value}
+        </span>
+        <DeltaToken delta={delta} size={11.5} />
+      </div>
+    </div>
+  );
+}
+
+// Trend-chart tooltip: real monthly values, or "Not yet reported" for the
+// upcoming (dashed-band) months.
+function TrendTooltip({ active, label, reported, installs, users }) {
+  if (!active || label == null) return null;
+  const i = MONTHS.indexOf(label);
+  const upcoming = reported >= 0 && i > reported;
+  return (
+    <div
+      style={{
+        background: '#fff',
+        border: `1px solid ${C.border}`,
+        borderRadius: 10,
+        padding: '8px 10px',
+        boxShadow: '0 4px 14px rgba(0,0,0,0.06)',
+        fontSize: 12,
+      }}
+    >
+      <div style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
+      {upcoming ? (
+        <div style={{ color: C.muted }}>Not yet reported</div>
+      ) : (
+        <>
+          <div style={{ color: C.green }}>Installs: {installs[i] == null ? DASH : fmtNumber(installs[i])}</div>
+          <div style={{ color: C.primary }}>Active Users: {users[i] == null ? DASH : fmtNumber(users[i])}</div>
+        </>
+      )}
+    </div>
   );
 }
 
@@ -2590,22 +2672,58 @@ function DashboardTab({ allYears }) {
   const periods = range ? periodsBetween(range.from, range.to) : [defaultPeriod];
   const multiMonth = periods.length > 1;
 
-  const kpiValue = (kpi) => {
-    if (kpi.type === 'lifetime') {
-      return lifetimeThrough(allYears, kpi.keys, range ? range.to : allTimeEnd);
+  // Current window vs the immediately-preceding comparable window (for deltas).
+  const periodCount = periods.length;
+  const compFrom = addMonths(periods[0], -periodCount);
+  const compTo = addMonths(periods[0], -1);
+  const compPeriods = periodsBetween(compFrom, compTo);
+
+  const curPrev = (def) => {
+    if (def.type === 'lifetime') {
+      const curEnd = range ? range.to : allTimeEnd;
+      if (!curEnd) return [null, null];
+      return [
+        lifetimeThrough(allYears, def.keys, curEnd),
+        lifetimeThrough(allYears, def.keys, addMonths(curEnd, -periodCount)),
+      ];
     }
-    if (kpi.type === 'additive') {
-      return sumKeysOver(allYears, kpi.keys, periods);
+    if (def.type === 'additive') {
+      return [sumKeysOver(allYears, def.keys, periods), sumKeysOver(allYears, def.keys, compPeriods)];
     }
-    if (kpi.type === 'ratio') {
-      const n = sumKeysOver(allYears, kpi.num, periods);
-      const d = sumKeysOver(allYears, kpi.den, periods);
-      const isPct = kpi.unit === 'percent' || kpi.unit === 'percent2';
-      return isPct ? pct(n, d) : safeDiv(n, d);
+    if (def.type === 'ratio') {
+      const isPct = def.unit === 'percent' || def.unit === 'percent2';
+      const cn = sumKeysOver(allYears, def.num, periods);
+      const cd = sumKeysOver(allYears, def.den, periods);
+      const pn = sumKeysOver(allYears, def.num, compPeriods);
+      const pd = sumKeysOver(allYears, def.den, compPeriods);
+      return [isPct ? pct(cn, cd) : safeDiv(cn, cd), isPct ? pct(pn, pd) : safeDiv(pn, pd)];
     }
-    return pointInTimeOver(allYears, kpi.key, periods); // point-in-time
+    return [pointInTimeOver(allYears, def.key, periods), pointInTimeOver(allYears, def.key, compPeriods)];
   };
 
+  // Delta vs the comparison window. Percentage metrics report points (pp);
+  // everything else reports relative %. Up is "good" for all dashboard metrics.
+  const deltaOf = (def, cur, prev) => {
+    if (cur == null || prev == null) return { dir: 'none', text: null };
+    const isPP = def.unit === 'percent' || def.unit === 'percent2';
+    if (isPP) {
+      const d = cur - prev;
+      return { dir: d >= 0 ? 'up' : 'down', text: `${d >= 0 ? '▲' : '▼'} ${Math.abs(d).toFixed(1)}pp` };
+    }
+    if (prev === 0) return { dir: 'none', text: null };
+    const d = ((cur - prev) / Math.abs(prev)) * 100;
+    return { dir: d >= 0 ? 'up' : 'down', text: `${d >= 0 ? '▲' : '▼'} ${Math.abs(d).toFixed(1)}%` };
+  };
+
+  const comparePhrase = range ? 'previous period' : 'last month';
+  const buildMetric = (def, withCompare) => {
+    const [cur, prev] = curPrev(def);
+    const pointSuffix = def.type === 'point' && multiMonth ? ` (${POINT_IN_TIME_AGG})` : '';
+    const compare = withCompare && prev != null ? `vs ${fmtByUnit(prev, def.unit)} ${comparePhrase}` : null;
+    return { label: def.label + pointSuffix, value: fmtByUnit(cur, def.unit), delta: deltaOf(def, cur, prev), compare };
+  };
+
+  // Hero = our cumulative headline totals; the rest form the supporting strip.
   const kpiDefs = [
     { label: 'Total Installs', type: 'lifetime', keys: storeKeys, unit: 'count' },
     { label: 'Total Users', type: 'lifetime', keys: ['u_newUsers'], unit: 'count' },
@@ -2619,29 +2737,49 @@ function DashboardTab({ allYears }) {
     { label: 'MAU', type: 'point', key: 'u_mau', unit: 'count' },
     { label: 'DAU', type: 'point', key: 'u_dau', unit: 'count' },
   ];
+  const heroMetrics = kpiDefs.slice(0, 3).map((d) => buildMetric(d, true));
+  const secondaryMetrics = kpiDefs.slice(3).map((d) => buildMetric(d, false));
 
-  const kpis = kpiDefs.map((kpi) => {
-    const pointSuffix = kpi.type === 'point' && multiMonth ? ` (${POINT_IN_TIME_AGG})` : '';
-    return { label: kpi.label + pointSuffix, value: fmtByUnit(kpiValue(kpi), kpi.unit) };
-  });
+  // Combined trend chart: a 12-month calendar year, solid through the latest
+  // reported month then a softly-shaded "upcoming" band with dashed lines.
+  const chartYear = range ? range.to.y : new Date().getFullYear();
+  const chartYearData = allYears[String(chartYear)] || {};
+  const reported = latestMonthIndex(chartYearData);
+  const installsByMonth = IDX.map((i) => sumKeysAt(allYears, storeKeys, { y: chartYear, m: i }));
+  const usersByMonth = IDX.map((i) => getVal(chartYearData, 'u_mau', i));
+  const lastInstall = reported >= 0 ? installsByMonth[reported] : null;
+  const lastUser = reported >= 0 ? usersByMonth[reported] : null;
+  const trendData = IDX.map((i) => ({
+    m: MONTHS[i],
+    installsSolid: reported >= 0 && i <= reported ? installsByMonth[i] : null,
+    installsDash: reported >= 0 && i >= reported ? lastInstall : null,
+    usersSolid: reported >= 0 && i <= reported ? usersByMonth[i] : null,
+    usersDash: reported >= 0 && i >= reported ? lastUser : null,
+  }));
+  const renderMonthTick = ({ x, y, payload }) => {
+    const i = MONTHS.indexOf(payload.value);
+    const isReported = i === reported;
+    const isUpcoming = reported >= 0 && i > reported;
+    return (
+      <text
+        x={x}
+        y={y + 12}
+        textAnchor="middle"
+        fontSize={10.5}
+        fontWeight={isReported ? 700 : 400}
+        fontFamily="var(--font-body)"
+        fill={isReported ? C.text : isUpcoming ? C.gray400 : C.muted}
+      >
+        {payload.value}
+      </text>
+    );
+  };
 
-  // Charts follow the range; default to the current calendar year.
-  const now = new Date();
-  const chartPeriods = range
-    ? periods
-    : periodsBetween({ y: now.getFullYear(), m: 0 }, { y: now.getFullYear(), m: 11 });
-  const spanYears =
-    chartPeriods.length > 0 && chartPeriods[0].y !== chartPeriods[chartPeriods.length - 1].y;
-  const labelOf = (p) => (spanYears ? `${MONTHS[p.m]} '${String(p.y).slice(2)}` : MONTHS[p.m]);
-  const installsData = chartPeriods.map((p) => ({ m: labelOf(p), Installs: sumKeysAt(allYears, storeKeys, p) }));
-  const mauData = chartPeriods.map((p) => ({ m: labelOf(p), MAU: getVal(allYears[String(p.y)], 'u_mau', p.m) }));
-  const volData = chartPeriods.map((p) => ({ m: labelOf(p), Volume: sumKeysAt(allYears, valueKeys, p) }));
-
-  const caption = range
-    ? PERIOD(range.from.y, range.from.m) === PERIOD(range.to.y, range.to.m)
-      ? fmtPeriod(range.from)
-      : `${fmtPeriod(range.from)} – ${fmtPeriod(range.to)}`
-    : `Latest month: ${fmtPeriod(defaultPeriod)} · lifetime totals all-time`;
+  // Editorial subtitle: current window vs. the comparison window.
+  const fmtWindow = (a, b) =>
+    PERIOD(a.y, a.m) === PERIOD(b.y, b.m) ? fmtPeriod(a) : `${fmtPeriod(a)} – ${fmtPeriod(b)}`;
+  const currentLabel = range ? fmtWindow(range.from, range.to) : fmtPeriod(defaultPeriod);
+  const caption = `${currentLabel} · vs ${fmtWindow(compFrom, compTo)}`;
 
   const pillStyle = (active) => ({
     border: `1px solid ${active ? C.primary : C.border}`,
@@ -2665,11 +2803,11 @@ function DashboardTab({ allYears }) {
   };
 
   return (
-    <div style={{ display: 'grid', gap: 16 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+    <div style={{ display: 'grid', gap: 14 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 12, flexWrap: 'wrap' }}>
         <div>
-          <h2 style={{ fontSize: 18 }}>Dashboard</h2>
-          <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>{caption}</div>
+          <h2 style={{ fontFamily: 'var(--font-head)', fontWeight: 600, fontSize: 22, margin: 0 }}>Dashboard</h2>
+          <div style={{ fontSize: 12.5, color: C.muted, marginTop: 3 }}>{caption}</div>
         </div>
         <div style={{ flex: 1 }} />
         <DownloadButton label="Download all" />
@@ -2709,51 +2847,118 @@ function DashboardTab({ allYears }) {
         </div>
       </Card>
 
+      {/* Hero row — large headline totals in one card */}
       <div
         style={{
+          background: C.card,
+          border: `1px solid ${C.border}`,
+          borderRadius: 18,
+          overflow: 'hidden',
           display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
-          gap: 16,
+          gridTemplateColumns: 'repeat(3, 1fr)',
         }}
       >
-        {kpis.map((k) => (
-          <KpiCard key={k.label} {...k} />
+        {heroMetrics.map((m, i) => (
+          <HeroMetric key={m.label} {...m} divider={i < heroMetrics.length - 1} />
         ))}
       </div>
 
-      <TwoCol>
-        <ChartCard title="Installs" accent={C.green}>
-          <AreaChart data={installsData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
-            {gradient('dashDownloads', C.green)}
-            <CartesianGrid {...GRID} />
-            <XAxis {...X_AXIS} />
-            <YAxis {...yAxis()} />
-            <Tooltip content={<ChartTooltip fmt={fmtNumber} />} />
-            <Area type="monotone" dataKey="Installs" stroke={C.green} strokeWidth={2} fill="url(#dashDownloads)" connectNulls />
-          </AreaChart>
-        </ChartCard>
-        <ChartCard title="Monthly Active Users" accent={C.blue}>
-          <AreaChart data={mauData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
-            {gradient('dashMau', C.blue)}
-            <CartesianGrid {...GRID} />
-            <XAxis {...X_AXIS} />
-            <YAxis {...yAxis()} />
-            <Tooltip content={<ChartTooltip fmt={fmtNumber} />} />
-            <Area type="monotone" dataKey="MAU" stroke={C.blue} strokeWidth={2} fill="url(#dashMau)" connectNulls />
-          </AreaChart>
-        </ChartCard>
-      </TwoCol>
+      {/* Secondary strip — supporting metrics */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 14 }}>
+        {secondaryMetrics.map((m) => (
+          <StatCard key={m.label} {...m} />
+        ))}
+      </div>
 
-      <ChartCard title="Transaction Volume (USDT)" accent={C.amber} height={260}>
-        <AreaChart data={volData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
-          {gradient('dashVol', C.amber)}
-          <CartesianGrid {...GRID} />
-          <XAxis {...X_AXIS} />
-          <YAxis {...yAxis()} />
-          <Tooltip content={<ChartTooltip fmt={fmtUSDT} />} />
-          <Area type="monotone" dataKey="Volume" stroke={C.amber} strokeWidth={2} fill="url(#dashVol)" connectNulls />
-        </AreaChart>
-      </ChartCard>
+      {/* Combined trend chart — anchors the page */}
+      <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 18, padding: '20px 24px' }}>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            marginBottom: 6,
+            flexWrap: 'wrap',
+            gap: 8,
+          }}
+        >
+          <h3 style={{ fontFamily: 'var(--font-head)', fontWeight: 600, fontSize: 16, margin: 0 }}>
+            Installs &amp; Active Users
+          </h3>
+          <div style={{ display: 'flex', gap: 16, fontSize: 11.5, color: C.muted }}>
+            <span>
+              <span style={{ color: C.green }}>●</span> Installs
+            </span>
+            <span>
+              <span style={{ color: C.primary }}>●</span> Active Users
+            </span>
+            <span style={{ color: C.gray400 }}>▦ Upcoming</span>
+          </div>
+        </div>
+        {reported < 0 ? (
+          <EmptyChart />
+        ) : (
+          <ResponsiveContainer width="100%" height={250}>
+            <ComposedChart data={trendData} margin={{ top: 6, right: 8, left: 0, bottom: 0 }}>
+              {gradient('dashTrendInstalls', C.green)}
+              <CartesianGrid {...GRID} />
+              {reported < 11 && (
+                <ReferenceArea x1={MONTHS[reported]} x2={MONTHS[11]} fill="rgba(0,17,168,0.04)" stroke="none" />
+              )}
+              {reported < 11 && <ReferenceLine x={MONTHS[reported]} stroke={C.gray400} />}
+              <XAxis dataKey="m" tickLine={false} axisLine={false} interval={0} tick={renderMonthTick} />
+              <YAxis yAxisId="left" hide />
+              <YAxis yAxisId="right" orientation="right" hide />
+              <Tooltip
+                content={(p) => (
+                  <TrendTooltip {...p} reported={reported} installs={installsByMonth} users={usersByMonth} />
+                )}
+              />
+              <Area
+                yAxisId="left"
+                type="monotone"
+                dataKey="installsSolid"
+                stroke={C.green}
+                strokeWidth={2.4}
+                fill="url(#dashTrendInstalls)"
+                dot={false}
+                connectNulls={false}
+              />
+              <Line
+                yAxisId="left"
+                type="monotone"
+                dataKey="installsDash"
+                stroke={C.green}
+                strokeOpacity={0.5}
+                strokeWidth={2}
+                strokeDasharray="6 6"
+                dot={false}
+                connectNulls={false}
+              />
+              <Line
+                yAxisId="right"
+                type="monotone"
+                dataKey="usersSolid"
+                stroke={C.primary}
+                strokeWidth={2.4}
+                dot={false}
+                connectNulls={false}
+              />
+              <Line
+                yAxisId="right"
+                type="monotone"
+                dataKey="usersDash"
+                stroke={C.primary}
+                strokeOpacity={0.45}
+                strokeWidth={2}
+                strokeDasharray="6 6"
+                dot={false}
+                connectNulls={false}
+              />
+            </ComposedChart>
+          </ResponsiveContainer>
+        )}
+      </div>
     </div>
   );
 }
