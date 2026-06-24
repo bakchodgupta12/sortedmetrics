@@ -2675,6 +2675,36 @@ function RoleBadge({ role }) {
   );
 }
 
+// A single row-action in the kebab menu, with a subtle hover.
+function MenuItem({ onClick, danger, children }) {
+  const [hover, setHover] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        display: 'block',
+        width: '100%',
+        textAlign: 'left',
+        border: 'none',
+        borderRadius: 6,
+        background: hover ? C.gray100 : 'transparent',
+        color: danger ? C.red : C.text,
+        padding: '8px 12px',
+        fontSize: 13,
+        fontWeight: 500,
+        fontFamily: 'inherit',
+        cursor: 'pointer',
+        whiteSpace: 'nowrap',
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
 function TeamPanel({ user }) {
   const isMaster = user.role === ROLES.MASTER;
 
@@ -2692,7 +2722,18 @@ function TeamPanel({ user }) {
   const [resetErr, setResetErr] = useState('');
   const [resetDone, setResetDone] = useState(null); // { username, name, pw }
 
+  const [openMenu, setOpenMenu] = useState(null); // username whose kebab menu is open
+  const [showAdd, setShowAdd] = useState(false); // add-member form collapsed by default
+
   const settingInput = { ...authInput, maxWidth: 320, marginTop: 0 };
+
+  // Close the open kebab menu on any outside click.
+  useEffect(() => {
+    if (!openMenu) return;
+    const close = () => setOpenMenu(null);
+    document.addEventListener('click', close);
+    return () => document.removeEventListener('click', close);
+  }, [openMenu]);
 
   const reload = useCallback(async () => {
     try {
@@ -2714,8 +2755,12 @@ function TeamPanel({ user }) {
     return () => clearTimeout(t);
   }, [addMsg]);
 
-  const nameOf = (a) =>
-    a.display_name && a.display_name.trim() ? a.display_name.trim() : a.username;
+  // Display name with a capitalised first letter (display-only; the stored
+  // username is unchanged). Falls back to the username when no display name.
+  const nameOf = (a) => {
+    const base = a.display_name && a.display_name.trim() ? a.display_name.trim() : a.username;
+    return base.charAt(0).toUpperCase() + base.slice(1);
+  };
 
   // What the current user may do to a given account, per the hierarchy.
   const actionsFor = (a) => {
@@ -2745,7 +2790,8 @@ function TeamPanel({ user }) {
       setNewUsername('');
       setNewPassword('');
       setNewRole(ROLES.MEMBER);
-      setAddMsg('Account created.');
+      setAddMsg('');
+      setShowAdd(false); // collapse the form; the new row is the confirmation
       await reload();
     } catch (e) {
       const dup = String(e.message || '').toLowerCase().includes('duplicate');
@@ -2839,8 +2885,7 @@ function TeamPanel({ user }) {
 
   return (
     <Card accent={C.primary}>
-      <div style={settingsSectionLabel}>Team</div>
-      <h2 style={{ fontSize: 18, margin: '4px 0 12px' }}>Members</h2>
+      <div style={{ ...settingsSectionLabel, marginBottom: 10 }}>Team</div>
 
       {accounts == null ? (
         <p style={{ fontSize: 13, color: C.muted }}>Loading team…</p>
@@ -2876,11 +2921,11 @@ function TeamPanel({ user }) {
                   </div>
                   <div
                     style={{
-                      width: 296,
+                      width: 92,
                       display: 'flex',
-                      gap: 6,
                       justifyContent: 'flex-end',
                       alignItems: 'center',
+                      position: 'relative',
                     }}
                   >
                     {can.protected ? (
@@ -2889,29 +2934,69 @@ function TeamPanel({ user }) {
                       </span>
                     ) : (
                       <>
-                        {can.promote && (
-                          <button style={actionBtn()} disabled={busy} onClick={() => promote(a)}>
-                            Make Owner
-                          </button>
-                        )}
-                        {can.demote && (
-                          <button style={actionBtn()} disabled={busy} onClick={() => demote(a)}>
-                            Make Member
-                          </button>
-                        )}
-                        {can.reset && (
-                          <button style={actionBtn()} disabled={busy} onClick={() => openReset(a)}>
-                            Reset
-                          </button>
-                        )}
-                        {can.remove && (
-                          <button
-                            style={actionBtn('danger')}
-                            disabled={busy}
-                            onClick={() => remove(a)}
+                        <button
+                          type="button"
+                          title="Actions"
+                          aria-label="Actions"
+                          disabled={busy}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setOpenMenu(openMenu === a.username ? null : a.username);
+                          }}
+                          style={{
+                            border: 'none',
+                            background: openMenu === a.username ? C.gray200 : 'transparent',
+                            borderRadius: 7,
+                            width: 28,
+                            height: 28,
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            color: C.gray600,
+                            fontSize: 18,
+                            lineHeight: 1,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          ⋮
+                        </button>
+                        {openMenu === a.username && (
+                          <div
+                            onClick={(e) => e.stopPropagation()}
+                            style={{
+                              position: 'absolute',
+                              top: 32,
+                              right: 0,
+                              zIndex: 30,
+                              background: '#fff',
+                              border: `1px solid ${C.border}`,
+                              borderRadius: 10,
+                              boxShadow: '0 8px 24px rgba(0,0,0,0.12)',
+                              padding: 4,
+                              minWidth: 170,
+                            }}
                           >
-                            Remove
-                          </button>
+                            {can.promote && (
+                              <MenuItem onClick={() => { setOpenMenu(null); promote(a); }}>
+                                Make Owner
+                              </MenuItem>
+                            )}
+                            {can.demote && (
+                              <MenuItem onClick={() => { setOpenMenu(null); demote(a); }}>
+                                Make Member
+                              </MenuItem>
+                            )}
+                            {can.reset && (
+                              <MenuItem onClick={() => { setOpenMenu(null); openReset(a); }}>
+                                Reset password
+                              </MenuItem>
+                            )}
+                            {can.remove && (
+                              <MenuItem danger onClick={() => { setOpenMenu(null); remove(a); }}>
+                                Remove
+                              </MenuItem>
+                            )}
+                          </div>
                         )}
                       </>
                     )}
@@ -2994,38 +3079,82 @@ function TeamPanel({ user }) {
       )}
       {err && <p style={{ color: C.red, fontSize: 13 }}>{err}</p>}
 
-      <h3 style={{ fontSize: 14, margin: '18px 0 10px' }}>Add a member</h3>
-      <div style={{ display: 'grid', gap: 8, maxWidth: 320 }}>
-        <input
-          style={settingInput}
-          placeholder="Username"
-          value={newUsername}
-          onChange={(e) => setNewUsername(e.target.value)}
-        />
-        <input
-          style={settingInput}
-          type="password"
-          placeholder={`Initial password (${PASSWORD_RULE})`}
-          value={newPassword}
-          onChange={(e) => setNewPassword(e.target.value)}
-        />
-        <select
-          style={{ ...settingInput, cursor: 'pointer' }}
-          value={newRole}
-          onChange={(e) => setNewRole(e.target.value)}
-        >
-          <option value={ROLES.MEMBER}>Member</option>
-          {isMaster && <option value={ROLES.OWNER}>Owner</option>}
-        </select>
-        <div>
-          <button style={{ ...settingsSmallBtn, marginTop: 0 }} disabled={busy} onClick={addMember}>
-            {busy ? 'Working…' : 'Add member'}
+      <div style={{ marginTop: 14 }}>
+        {showAdd ? (
+          <div style={{ display: 'grid', gap: 8, maxWidth: 320 }}>
+            <h3 style={{ fontSize: 14, margin: '0 0 2px' }}>Add a member</h3>
+            <input
+              style={settingInput}
+              placeholder="Username"
+              value={newUsername}
+              onChange={(e) => setNewUsername(e.target.value)}
+            />
+            <input
+              style={settingInput}
+              type="password"
+              placeholder={`Initial password (${PASSWORD_RULE})`}
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+            />
+            <select
+              style={{ ...settingInput, cursor: 'pointer' }}
+              value={newRole}
+              onChange={(e) => setNewRole(e.target.value)}
+            >
+              <option value={ROLES.MEMBER}>Member</option>
+              {isMaster && <option value={ROLES.OWNER}>Owner</option>}
+            </select>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <button style={{ ...settingsSmallBtn, marginTop: 0 }} disabled={busy} onClick={addMember}>
+                {busy ? 'Working…' : 'Add member'}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowAdd(false);
+                  setAddMsg('');
+                  setNewUsername('');
+                  setNewPassword('');
+                  setNewRole(ROLES.MEMBER);
+                }}
+                style={{
+                  border: `1px solid ${C.border}`,
+                  background: '#fff',
+                  color: C.text,
+                  borderRadius: 8,
+                  padding: '8px 14px',
+                  fontSize: 13,
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+            {addMsg && (
+              <p style={{ color: C.red, fontSize: 13, margin: '4px 0 0' }}>{addMsg}</p>
+            )}
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => {
+              setAddMsg('');
+              setShowAdd(true);
+            }}
+            style={{
+              border: `1px solid ${C.border}`,
+              background: '#fff',
+              color: C.primary,
+              borderRadius: 8,
+              padding: '8px 14px',
+              fontSize: 13,
+              fontWeight: 600,
+              cursor: 'pointer',
+            }}
+          >
+            + Add a member
           </button>
-        </div>
-        {addMsg && (
-          <p style={{ color: addMsg.includes('created') ? C.green : C.red, fontSize: 13, margin: '4px 0 0' }}>
-            {addMsg}
-          </p>
         )}
       </div>
     </Card>
