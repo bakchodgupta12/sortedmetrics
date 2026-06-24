@@ -106,6 +106,7 @@ const C = {
   primary: '#0011a8',
   primaryDark: '#000077',
   red: '#ff0044',
+  redBg: '#ffe3ea', // light red — cross-tab mismatch / validation highlight
 
   // Functional chart-series colours — distinct, carry meaning
   green: '#6dbb8a',
@@ -1025,18 +1026,8 @@ function pctSeries(a, b) {
 function ratioSeries(a, b) {
   return IDX.map((i) => safeDiv(a[i], b[i]));
 }
-function cumulativeSeries(s) {
-  let run = 0;
-  let has = false;
-  return IDX.map((i) => {
-    if (s[i] != null) {
-      run += s[i];
-      has = true;
-    }
-    return has ? run : null;
-  });
-}
-// Like cumulativeSeries but seeded with a starting `base` (prior years' total),
+// Like a plain cumulative running total but seeded with a starting `base`
+// (prior years' total),
 // so a lifetime running total carries forward across years instead of resetting.
 function cumulativeSeriesFrom(s, base) {
   let run = base || 0;
@@ -1355,15 +1346,35 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD' }) {
                       {row.label}
                       {row.info && <InfoTip text={row.info} />}
                     </td>
-                    {MONTHS.map((m, i) => (
-                      <td key={m} style={{ textAlign: 'right', padding: '4px 6px' }}>
-                        <Cell
-                          value={getVal(yearData, row.key, i)}
-                          unit={row.unit}
-                          onCommit={(v) => updateMetric(row.key, m, v)}
-                        />
-                      </td>
-                    ))}
+                    {MONTHS.map((m, i) => {
+                      const cellVal = getVal(yearData, row.key, i);
+                      // Cross-tab drift check: flag (don't force) a mismatch
+                      // against the linked metric on another tab for this month.
+                      let mismatch = null;
+                      if (row.compare) {
+                        const other = getVal(yearData, row.compare.key, i);
+                        if (cellVal != null && other != null && cellVal !== other) {
+                          mismatch = row.compare.message;
+                        }
+                      }
+                      return (
+                        <td
+                          key={m}
+                          title={mismatch || undefined}
+                          style={{
+                            textAlign: 'right',
+                            padding: '4px 6px',
+                            background: mismatch ? C.redBg : undefined,
+                          }}
+                        >
+                          <Cell
+                            value={cellVal}
+                            unit={row.unit}
+                            onCommit={(v) => updateMetric(row.key, m, v)}
+                          />
+                        </td>
+                      );
+                    })}
                     <td
                       style={{
                         textAlign: 'right',
@@ -1797,45 +1808,105 @@ function TransactionsTab({ yearData, updateMetric, allYears, activeYear }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Cards tab
 // ─────────────────────────────────────────────────────────────────────────────
-function CardsTab({ yearData, updateMetric }) {
+// Cross-tab drift flag shown when a Top-up Cards figure disagrees with the
+// matching entry on the Transactions tab for the same month.
+const TX_CARD_MISMATCH =
+  'This figure does not match the Top-up Cards entry on the Transactions tab.';
+
+// By-market is a snapshot, not a time series: each country's figures are single
+// totals stored in the first month slot. Colours follow the table row order.
+const SNAP_IDX = 0;
+const MARKETS = [
+  { name: 'Kenya', color: C.purple, sold: 'c_mktKE_sold', value: 'c_mktKE_value', funds: 'c_mktKE_funds', users: 'c_mktKE_users' },
+  { name: 'Nigeria', color: C.blue, sold: 'c_mktNG_sold', value: 'c_mktNG_value', funds: 'c_mktNG_funds', users: 'c_mktNG_users' },
+  { name: 'Tanzania', color: C.amber, sold: 'c_mktTZ_sold', value: 'c_mktTZ_value', funds: 'c_mktTZ_funds', users: 'c_mktTZ_users' },
+];
+
+function CardsTab({ yearData, updateMetric, allYears, activeYear }) {
   const latest = latestMonthIndex(yearData);
   const sold = rawSeries(yearData, 'c_sold');
-  const redeemed = rawSeries(yearData, 'c_redeemed');
-  const gross = rawSeries(yearData, 'c_grossRevenue');
-  const lost = rawSeries(yearData, 'c_discountFeesLost');
+  const valueDistributed = rawSeries(yearData, 'c_valueDistributed');
+  const fundsCollected = rawSeries(yearData, 'c_fundsCollected');
+  const uniqueUsers = rawSeries(yearData, 'c_uniqueUsers');
 
-  const outstanding = diffSeries(cumulativeSeries(sold), cumulativeSeries(redeemed));
-  const redemptionRate = pctSeries(redeemed, sold);
-  const netEarnings = diffSeries(gross, lost);
+  // Card-channel cost and its derived rates.
+  const discountsFees = diffSeries(valueDistributed, fundsCollected);
+  const avgDiscountPct = pctSeries(discountsFees, valueDistributed);
+  const cacPerUser = ratioSeries(discountsFees, uniqueUsers);
 
-  const soldY = seriesSum(sold, latest);
-  const redY = seriesSum(redeemed, latest);
-  const grossY = seriesSum(gross, latest);
-  const lostY = seriesSum(lost, latest);
+  // YTD figures. Unique users can't be summed, so CAC has no meaningful YTD.
+  const valueDistY = seriesSum(valueDistributed, latest);
+  const fundsY = seriesSum(fundsCollected, latest);
+  const discFeesY = valueDistY == null && fundsY == null ? null : (valueDistY || 0) - (fundsY || 0);
+
+  // Lifetime running totals carry forward across years.
+  const lifeSold = cumulativeSeriesFrom(sold, priorYearsTotal(allYears, activeYear, ['c_sold']));
+  const lifeValue = cumulativeSeriesFrom(valueDistributed, priorYearsTotal(allYears, activeYear, ['c_valueDistributed']));
 
   const rows = [
-    { kind: 'subhead', label: 'Activity' },
-    { kind: 'input', key: 'c_sold', label: 'Cards Sold', unit: 'count' },
-    { kind: 'input', key: 'c_redeemed', label: 'Cards Redeemed', unit: 'count' },
-    { kind: 'input', key: 'c_uniqueUsers', label: 'Unique Users', unit: 'count' },
-    { kind: 'input', key: 'c_usdtVolume', label: 'Card USDT Volume', unit: 'usdt' },
-    { kind: 'input', key: 'c_discountFeesLost', label: 'Discount & Fees Lost USD', unit: 'usd' },
-    { kind: 'input', key: 'c_grossRevenue', label: 'Gross Card Revenue USD', unit: 'usd' },
-    calc('Cards Outstanding', 'count', outstanding, valueAt(outstanding, latest), 'Cumulative sold − cumulative redeemed.'),
-    calc('Redemption Rate', 'percent', redemptionRate, pct(redY, soldY), 'Cards redeemed ÷ cards sold.'),
-    calc('Net Card Earnings', 'usd', netEarnings, grossY == null && lostY == null ? null : (grossY || 0) - (lostY || 0), 'Gross card revenue − discount & fees lost.'),
-    { kind: 'subhead', label: 'By market' },
-    { kind: 'input', key: 'c_mktKenya', label: 'Kenya', unit: 'count' },
-    { kind: 'input', key: 'c_mktNigeria', label: 'Nigeria', unit: 'count' },
-    { kind: 'input', key: 'c_mktOther', label: 'Other', unit: 'count' },
+    { kind: 'subhead', label: 'Card Activity' },
+    {
+      kind: 'input',
+      key: 'c_sold',
+      label: 'Cards Sold',
+      unit: 'count',
+      compare: { key: 'tx_cardRedemption', message: TX_CARD_MISMATCH },
+    },
+    {
+      kind: 'input',
+      key: 'c_valueDistributed',
+      label: 'Value Distributed',
+      unit: 'usdt',
+      info: 'USDT value loaded onto the cards sold — what left our wallets to users.',
+      compare: { key: 'tx_cardRedemptionVolume', message: TX_CARD_MISMATCH },
+    },
+    {
+      kind: 'input',
+      key: 'c_fundsCollected',
+      label: 'Funds Collected',
+      unit: 'usdt',
+      info: 'USDT remitted back to us from ambassador card sales.',
+    },
+    {
+      kind: 'input',
+      key: 'c_uniqueUsers',
+      label: 'Unique Users',
+      unit: 'count',
+      ytd: 'none',
+      info: 'Unique users who transacted via cards that month. Monthly uniques are not summed — the same user transacts across multiple months.',
+    },
+    calc('Discounts & Fees', 'usdt', discountsFees, discFeesY, 'The cost of the card channel — value we distributed minus funds collected back. Calculated as Value Distributed − Funds Collected.'),
+    calc('Average Discount %', 'percent', avgDiscountPct, pct(discFeesY, valueDistY), 'The share of distributed value lost to discounts and fees. Calculated as Discounts & Fees ÷ Value Distributed.'),
+    {
+      ...calc('CAC per Transacting User', 'ratio', cacPerUser, null, 'Effective cost to acquire each transacting card user. Calculated as Discounts & Fees ÷ Unique Users.'),
+      blankTotal: true,
+    },
+    { kind: 'subhead', label: 'Lifetime' },
+    {
+      ...calc('Total Cards Sold', 'count', lifeSold, null, 'Cumulative number of cards sold since we began tracking. Carries forward across years.'),
+      blankTotal: true,
+    },
+    {
+      ...calc('Total Value Distributed', 'usdt', lifeValue, null, 'Cumulative USDT value distributed since we began tracking. Carries forward across years.'),
+      blankTotal: true,
+    },
+    {
+      kind: 'input',
+      key: 'c_lifetimeUniqueUsers',
+      label: 'Total Unique Users',
+      unit: 'count',
+      ytd: 'last',
+      info: 'Manually entered deduplicated all-time unique card users. This is not a sum of the monthly Unique Users row — the same user transacts across multiple months, which would massively overcount.',
+    },
   ];
 
-  const soldRedeemed = monthChartData({ 'Cards Sold': sold, 'Cards Redeemed': redeemed });
-  const marketTotals = [
-    { name: 'Kenya', value: seriesSum(rawSeries(yearData, 'c_mktKenya'), latest) || 0, color: C.purple },
-    { name: 'Nigeria', value: seriesSum(rawSeries(yearData, 'c_mktNigeria'), latest) || 0, color: C.blue },
-    { name: 'Other', value: seriesSum(rawSeries(yearData, 'c_mktOther'), latest) || 0, color: C.amber },
-  ];
+  // Charts: monthly activity (counts) and the by-market snapshot.
+  const activityChart = monthChartData({ 'Cards Sold': sold, 'Unique Users': uniqueUsers });
+  const marketTotals = MARKETS.map((mk) => ({
+    name: mk.name,
+    value: getVal(yearData, mk.sold, SNAP_IDX) || 0,
+    color: mk.color,
+  }));
   const marketHasData = marketTotals.some((m) => m.value > 0);
 
   return (
@@ -1843,20 +1914,21 @@ function CardsTab({ yearData, updateMetric }) {
       <Card accent={C.primary}>
         <TabTitle title="Top-up Cards" accent={C.purple} />
         <MetricTable yearData={yearData} rows={rows} updateMetric={updateMetric} />
+        <MarketSummaryTable yearData={yearData} updateMetric={updateMetric} />
       </Card>
       <TwoCol>
-        <ChartCard title="Cards Sold vs Redeemed" accent={C.purple}>
-          <BarChart data={soldRedeemed} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+        <ChartCard title="Cards Sold & Unique Users" accent={C.purple}>
+          <BarChart data={activityChart} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
             <CartesianGrid {...GRID} />
             <XAxis {...X_AXIS} />
             <YAxis {...yAxis()} />
             <Tooltip content={<ChartTooltip fmt={fmtNumber} />} />
             <Legend wrapperStyle={{ fontSize: 11 }} itemSorter={null} />
             <Bar dataKey="Cards Sold" fill={C.purple} barSize={18} radius={[4, 4, 0, 0]} />
-            <Bar dataKey="Cards Redeemed" fill={C.green} barSize={18} radius={[4, 4, 0, 0]} />
+            <Bar dataKey="Unique Users" fill={C.blue} barSize={18} radius={[4, 4, 0, 0]} />
           </BarChart>
         </ChartCard>
-        <ChartCard title="Cards by Market (YTD)" accent={C.purple}>
+        <ChartCard title="Cards Sold by Market" accent={C.purple}>
           {marketHasData ? (
             <PieChart>
               <Pie data={marketTotals} dataKey="value" nameKey="name" innerRadius={55} outerRadius={90} paddingAngle={2}>
@@ -1872,6 +1944,137 @@ function CardsTab({ yearData, updateMetric }) {
           )}
         </ChartCard>
       </TwoCol>
+    </div>
+  );
+}
+
+// Section 3 — By Market. A per-country snapshot summary table (not a month
+// grid). Cards Sold, Value Distributed, Funds Collected and Unique Users are
+// manual totals; Average Discount % and CAC are computed per country and on the
+// column totals.
+function MarketSummaryTable({ yearData, updateMetric }) {
+  const read = (key) => getVal(yearData, key, SNAP_IDX);
+
+  const rowFor = (mk) => {
+    const sold = read(mk.sold);
+    const value = read(mk.value);
+    const funds = read(mk.funds);
+    const users = read(mk.users);
+    const discFees = value == null && funds == null ? null : (value || 0) - (funds || 0);
+    return { sold, value, funds, users, discPct: pct(discFees, value), cac: safeDiv(discFees, users) };
+  };
+
+  const sumCol = (k) => {
+    let acc = 0;
+    let any = false;
+    for (const mk of MARKETS) {
+      const v = read(mk[k]);
+      if (v != null) {
+        acc += v;
+        any = true;
+      }
+    }
+    return any ? acc : null;
+  };
+  const tSold = sumCol('sold');
+  const tValue = sumCol('value');
+  const tFunds = sumCol('funds');
+  const tUsers = sumCol('users');
+  const tDiscFees = tValue == null && tFunds == null ? null : (tValue || 0) - (tFunds || 0);
+  const totals = { discPct: pct(tDiscFees, tValue), cac: safeDiv(tDiscFees, tUsers) };
+
+  const headCell = (label, alignLeft, info) => (
+    <th
+      style={{
+        ...thBase,
+        textAlign: alignLeft ? 'left' : 'right',
+        padding: alignLeft ? '10px 16px' : '10px 12px',
+      }}
+    >
+      {label}
+      {info && <InfoTip text={info} />}
+    </th>
+  );
+
+  const numCell = (val, unit, bold) => (
+    <td
+      style={{
+        textAlign: 'right',
+        fontSize: 13,
+        fontWeight: bold ? 700 : 600,
+        padding: '9px 12px',
+        background: C.gray200,
+      }}
+    >
+      {val == null ? DASH : fmtByUnit(val, unit)}
+    </td>
+  );
+
+  const editCell = (key, unit) => (
+    <td style={{ textAlign: 'right', padding: '4px 8px' }}>
+      <Cell value={read(key)} unit={unit} onCommit={(v) => updateMetric(key, MONTHS[SNAP_IDX], v)} />
+    </td>
+  );
+
+  return (
+    <div style={{ marginTop: 18 }}>
+      <div
+        style={{
+          fontSize: 12,
+          fontWeight: 700,
+          letterSpacing: '0.06em',
+          textTransform: 'uppercase',
+          color: C.text,
+          padding: '0 0 2px',
+        }}
+      >
+        By Market
+      </div>
+      <div style={{ fontSize: 12, color: C.muted, marginBottom: 10 }}>
+        Current cumulative totals per country — a snapshot, not tracked monthly.
+      </div>
+      <div style={{ overflowX: 'auto' }}>
+        <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 720 }}>
+          <thead>
+            <tr style={{ borderBottom: `1px solid ${C.border}` }}>
+              {headCell('Country', true)}
+              {headCell('Cards Sold')}
+              {headCell('Value Distributed')}
+              {headCell('Funds Collected')}
+              {headCell('Average Discount %', false, 'Discounts & Fees ÷ Value Distributed for the country.')}
+              {headCell('Unique Users')}
+              {headCell('CAC per Transacting User', false, 'Discounts & Fees ÷ Unique Users for the country.')}
+            </tr>
+          </thead>
+          <tbody>
+            {MARKETS.map((mk) => {
+              const r = rowFor(mk);
+              return (
+                <tr key={mk.name} style={{ borderBottom: `1px solid ${C.bg}` }}>
+                  <td style={{ textAlign: 'left', fontSize: 13, padding: '7px 16px', whiteSpace: 'nowrap' }}>
+                    {mk.name}
+                  </td>
+                  {editCell(mk.sold, 'count')}
+                  {editCell(mk.value, 'usdt')}
+                  {editCell(mk.funds, 'usdt')}
+                  {numCell(r.discPct, 'percent')}
+                  {editCell(mk.users, 'count')}
+                  {numCell(r.cac, 'ratio')}
+                </tr>
+              );
+            })}
+            <tr style={{ borderTop: `1px solid ${C.border}` }}>
+              <td style={{ textAlign: 'left', fontSize: 13, fontWeight: 700, padding: '9px 16px' }}>Total</td>
+              {numCell(tSold, 'count', true)}
+              {numCell(tValue, 'usdt', true)}
+              {numCell(tFunds, 'usdt', true)}
+              {numCell(totals.discPct, 'percent', true)}
+              {numCell(tUsers, 'count', true)}
+              {numCell(totals.cac, 'ratio', true)}
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
