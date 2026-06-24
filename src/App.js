@@ -3,12 +3,12 @@ import { createPortal } from 'react-dom';
 import {
   Area,
   Bar,
+  BarChart,
   CartesianGrid,
   Cell as RCell,
   ComposedChart,
   Legend,
   Line,
-  LineChart,
   Pie,
   PieChart,
   ReferenceArea,
@@ -571,6 +571,21 @@ function Dashboard({ user, setUser, onLogout }) {
     [activeYear, canEdit]
   );
 
+  // Set a free-form field on the active year (e.g. the Campaigns list / KPI
+  // strip, which don't fit the metric/month grid). Owners only.
+  const updateYearField = useCallback(
+    (field, value) => {
+      if (!canEdit) return;
+      setData((prev) => {
+        if (!prev) return prev;
+        const y = String(activeYear);
+        const year = prev.years[y] || emptyYear();
+        return { ...prev, years: { ...prev.years, [y]: { ...year, [field]: value } } };
+      });
+    },
+    [activeYear, canEdit]
+  );
+
   // Year management (owners only).
   const addYear = (year) => {
     if (!canEdit) return;
@@ -638,6 +653,7 @@ function Dashboard({ user, setUser, onLogout }) {
             canEdit={canEdit}
             updateMetric={updateMetric}
             updateNote={updateNote}
+            updateYearField={updateYearField}
           />
         </main>
       </div>
@@ -1201,16 +1217,12 @@ const thBase = {
   whiteSpace: 'nowrap',
 };
 
-// Subtle translucent grey for future/unentered month columns. Translucent so it
-// darkens both white input rows and the grey calc rows consistently.
-const FUTURE_BG = 'rgba(123, 125, 132, 0.08)';
-
 // Whitespace + a thin rule that separates a calculated block from the next
 // section, so groups don't run straight into one another.
 function DividerRow() {
   return (
     <tr aria-hidden="true">
-      <td colSpan={14} style={{ padding: 0 }}>
+      <td colSpan={15} style={{ padding: 0 }}>
         <div style={{ height: 1, background: C.border, margin: '12px 0 2px' }} />
       </td>
     </tr>
@@ -1223,14 +1235,69 @@ function SectionDivider() {
   return <div aria-hidden="true" style={{ height: 1, background: C.border, margin: '16px 0 0' }} />;
 }
 
+// ── Table restyle primitives (per the design reference) ─────────────────────
+// Upcoming-months band tints, the reported→upcoming divider, and the muted
+// sparkline colour for detail rows. Totals use the brand-blue primary.
+const UP_BAND_DETAIL = 'rgba(0,17,168,0.025)';
+const UP_BAND_TOTAL = 'rgba(0,17,168,0.06)';
+const UP_DIVIDER = '#e2ddd2';
+const CALC_ROW_BG = 'rgba(0,17,168,0.045)';
+const CALC_LABEL_BG = '#f3f4fc'; // opaque ≈ CALC_ROW_BG over white (sticky col)
+const SPARK_DETAIL = '#8a93d8';
+const CURRENT_TEXT = '#16161f';
+
+// Per-row sparkline drawn from the reported portion of a series (~60px). Muted
+// blue for detail rows, solid brand blue (heavier) for total/subtotal rows.
+function Sparkline({ values, color, strokeWidth = 1.6, width = 60, height = 21 }) {
+  const nums = values.filter((v) => isNum(v));
+  if (nums.length < 2) return null;
+  const mn = Math.min(...nums);
+  const mx = Math.max(...nums);
+  const r = mx - mn || 1;
+  const pad = 2.5;
+  const h = height - pad * 2;
+  const step = values.length > 1 ? width / (values.length - 1) : 0;
+  const pts = values
+    .map((v, i) =>
+      isNum(v) ? `${(i * step).toFixed(1)},${(pad + h - ((v - mn) / r) * h).toFixed(1)}` : null
+    )
+    .filter(Boolean)
+    .join(' ');
+  return (
+    <svg width={width} height={height} style={{ display: 'block', margin: '0 auto' }} aria-hidden="true">
+      <polyline
+        fill="none"
+        stroke={color}
+        strokeWidth={strokeWidth}
+        strokeLinejoin="round"
+        strokeLinecap="round"
+        points={pts}
+      />
+    </svg>
+  );
+}
+
+// Heat shade for an opt-in percentage cell, scaled across the row's reported
+// values: brand blue at variable alpha; text flips to white above ~0.42.
+function heatCell(reportedNums, v) {
+  if (!isNum(v) || reportedNums.length === 0) return null;
+  const mn = Math.min(...reportedNums);
+  const mx = Math.max(...reportedNums);
+  const r = mx - mn || 1;
+  const a = 0.12 + ((v - mn) / r) * 0.72;
+  return { background: `rgba(0,17,168,${a.toFixed(2)})`, color: a > 0.42 ? '#ffffff' : CURRENT_TEXT };
+}
+
 function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD' }) {
   const latest = latestMonthIndex(yearData);
-  // Months after the latest one with data are "not yet entered" — greyed out.
-  // Dynamic: as new months are filled, `latest` advances and the band shrinks.
+  // Months after the latest reported one sit under the "Upcoming" band, with a
+  // divider at the boundary. Dynamic: as new months are filled, `latest`
+  // advances and the band shrinks.
+  const hasBand = latest >= 0 && latest < 11;
+  const futureCols = hasBand ? 11 - latest : 0;
   const isFuture = (i) => latest >= 0 && i > latest;
-  // Calculated rows get a subtle brand-gray tint (not an accent fill).
-  const calcBg = C.gray200;
-  const calcLabelBg = C.gray200;
+  const isCurrent = (i) => latest >= 0 && i === latest;
+  const firstFuture = (i) => hasBand && i === latest + 1;
 
   const inputYtd = (key, mode) => {
     if (latest < 0 || mode === 'none') return null;
@@ -1240,6 +1307,16 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD' }) {
     return seriesSum(s, latest);
   };
 
+  // Sparkline drawn from the reported portion (Jan → latest) of a series.
+  const sparkValues = (series) => (latest >= 0 ? series.slice(0, latest + 1) : series);
+  const summaryHead = {
+    ...thBase,
+    padding: '12px 14px',
+    color: C.text,
+    fontWeight: 700,
+    borderLeft: `1px solid ${C.border}`,
+  };
+
   return (
     <div style={{ overflowX: 'auto' }}>
       <table
@@ -1247,45 +1324,66 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD' }) {
           borderCollapse: 'collapse',
           width: '100%',
           tableLayout: 'fixed',
-          minWidth: 880,
+          minWidth: 1074,
         }}
       >
+        {/* Explicit column widths so inputs shrink to the column (fixed layout)
+            and the header's "Upcoming" colspan lines up with the month cells. */}
+        <colgroup>
+          <col style={{ width: 170 }} />
+          <col style={{ width: 64 }} />
+          {MONTHS.map((m) => (
+            <col key={m} style={{ width: 62 }} />
+          ))}
+          <col style={{ width: 96 }} />
+        </colgroup>
         <thead>
           <tr style={{ borderBottom: `1px solid ${C.border}` }}>
             <th
               style={{
                 ...thBase,
                 textAlign: 'left',
-                padding: '10px 16px',
-                width: 184, // fixed; the 13 numeric columns split the rest evenly
+                padding: '12px 14px',
                 position: 'sticky',
                 left: 0,
                 background: C.card,
-              }}
-            />
-            {MONTHS.map((m, i) => (
-              <th
-                key={m}
-                style={isFuture(i) ? { ...thBase, background: FUTURE_BG, color: C.gray400 } : thBase}
-              >
-                {m}
-              </th>
-            ))}
-            <th
-              style={{
-                ...thBase,
-                // Reserve a dedicated width: under table-layout:fixed the total
-                // column otherwise shares a month column's narrow width, so the
-                // (largest) total values overflow it and padding-right can't
-                // create visible spacing. A fixed width lets the value sit
-                // inside the cell with its right padding showing.
-                width: 110,
-                paddingRight: 16,
-                borderLeft: `1px solid ${C.border}`,
+                zIndex: 1,
               }}
             >
-              {totalLabel}
+              Metric
             </th>
+            <th style={{ ...thBase, textAlign: 'center', padding: '12px 8px' }}>Trend</th>
+            {MONTHS.map((m, i) =>
+              hasBand && i > latest ? null : (
+                <th
+                  key={m}
+                  style={{
+                    ...thBase,
+                    color: isCurrent(i) ? CURRENT_TEXT : C.muted,
+                    fontWeight: isCurrent(i) ? 700 : 500,
+                  }}
+                >
+                  {m}
+                </th>
+              )
+            )}
+            {hasBand && (
+              <th
+                colSpan={futureCols}
+                style={{
+                  ...thBase,
+                  textAlign: 'center',
+                  color: C.primary,
+                  background: UP_BAND_TOTAL,
+                  borderLeft: `1px solid ${UP_DIVIDER}`,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                }}
+              >
+                {futureCols === 1 ? '▦ Upcoming' : `▦ Upcoming · ${MONTHS[latest + 1]} – Dec`}
+              </th>
+            )}
+            <th style={summaryHead}>{totalLabel}</th>
           </tr>
         </thead>
         <tbody>
@@ -1302,15 +1400,15 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD' }) {
                   {needsBreak && <DividerRow />}
                   <tr>
                     <td
-                      colSpan={14}
+                      colSpan={15}
                       style={{
-                        fontSize: 12,
+                        fontSize: 10.5,
                         fontWeight: 700,
-                        letterSpacing: '0.06em',
+                        letterSpacing: '0.07em',
                         textTransform: 'uppercase',
-                        color: C.text,
+                        color: C.primary,
                         textAlign: 'left',
-                        padding: '14px 8px 6px',
+                        padding: '16px 14px 6px',
                         whiteSpace: 'nowrap',
                       }}
                     >
@@ -1323,23 +1421,30 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD' }) {
 
             if (row.kind === 'input') {
               const ytd = inputYtd(row.key, row.ytd || 'sum');
+              const series = rawSeries(yearData, row.key);
+              const heatNums = row.heat ? sparkValues(series).filter(isNum) : null;
               return (
                 <React.Fragment key={row.key}>
                   {needsBreak && <DividerRow />}
-                  <tr style={{ borderBottom: `1px solid ${C.bg}` }}>
+                  <tr style={{ borderTop: `1px solid ${C.gray200}` }}>
                     <td
                       style={{
                         textAlign: 'left',
                         fontSize: 13,
-                        padding: '7px 16px',
+                        fontWeight: 500,
+                        padding: '7px 14px',
                         whiteSpace: 'nowrap',
                         position: 'sticky',
                         left: 0,
                         background: C.card,
+                        zIndex: 1,
                       }}
                     >
                       {row.label}
                       {row.info && <InfoTip text={row.info} />}
+                    </td>
+                    <td style={{ padding: '4px 8px', textAlign: 'center' }}>
+                      <Sparkline values={sparkValues(series)} color={SPARK_DETAIL} />
                     </td>
                     {MONTHS.map((m, i) => {
                       const cellVal = getVal(yearData, row.key, i);
@@ -1352,6 +1457,13 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD' }) {
                           mismatch = row.compare.message;
                         }
                       }
+                      const future = isFuture(i);
+                      const heat = !future && row.heat ? heatCell(heatNums, cellVal) : null;
+                      const inStyle = heat
+                        ? { color: heat.color, fontWeight: 600 }
+                        : isCurrent(i)
+                        ? { color: CURRENT_TEXT, fontWeight: 600 }
+                        : undefined;
                       return (
                         <td
                           key={m}
@@ -1359,13 +1471,21 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD' }) {
                           style={{
                             textAlign: 'right',
                             padding: '4px 6px',
-                            background: mismatch ? C.redBg : isFuture(i) ? FUTURE_BG : undefined,
+                            background: mismatch
+                              ? C.redBg
+                              : future
+                              ? UP_BAND_DETAIL
+                              : heat
+                              ? heat.background
+                              : undefined,
+                            borderLeft: firstFuture(i) ? `1px solid ${UP_DIVIDER}` : undefined,
                           }}
                         >
                           <Cell
                             value={cellVal}
                             unit={row.unit}
                             onCommit={(v) => updateMetric(row.key, m, v)}
+                            inputStyle={inStyle}
                           />
                         </td>
                       );
@@ -1374,9 +1494,10 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD' }) {
                       style={{
                         textAlign: 'right',
                         fontSize: 13,
-                        padding: '7px 16px',
+                        fontWeight: 700,
+                        padding: '7px 14px',
                         borderLeft: `1px solid ${C.border}`,
-                        color: C.muted,
+                        color: ytd == null ? C.gray400 : C.text,
                       }}
                     >
                       {row.ytd === 'none'
@@ -1397,42 +1518,54 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD' }) {
               return (
                 <React.Fragment key={`r${ri}`}>
                   {needsBreak && <DividerRow />}
-                  <tr style={{ borderBottom: `1px solid ${C.bg}` }}>
+                  <tr style={{ borderTop: `1px solid ${C.gray200}` }}>
                     <td
                       style={{
                         textAlign: 'left',
                         fontSize: 13,
-                        padding: '7px 16px',
+                        fontWeight: 500,
+                        padding: '7px 14px',
                         whiteSpace: 'nowrap',
                         position: 'sticky',
                         left: 0,
                         background: C.card,
+                        zIndex: 1,
                       }}
                     >
                       {row.label}
                       {row.info && <InfoTip text={row.info} />}
                     </td>
-                    {MONTHS.map((m, i) => (
-                      <td
-                        key={m}
-                        style={{
-                          textAlign: 'right',
-                          padding: '7px 10px',
-                          fontSize: 13,
-                          color: C.muted,
-                          background: isFuture(i) ? FUTURE_BG : undefined,
-                        }}
-                      >
-                        {row.values[i] == null ? DASH : fmtByUnit(row.values[i], row.unit)}
-                      </td>
-                    ))}
+                    <td style={{ padding: '4px 8px', textAlign: 'center' }}>
+                      <Sparkline values={sparkValues(row.values)} color={SPARK_DETAIL} />
+                    </td>
+                    {MONTHS.map((m, i) => {
+                      const future = isFuture(i);
+                      const v = row.values[i];
+                      return (
+                        <td
+                          key={m}
+                          style={{
+                            textAlign: 'right',
+                            padding: '7px 8px',
+                            fontSize: 13,
+                            fontWeight: isCurrent(i) ? 600 : 400,
+                            color: isCurrent(i) ? CURRENT_TEXT : C.muted,
+                            background: future ? UP_BAND_DETAIL : undefined,
+                            borderLeft: firstFuture(i) ? `1px solid ${UP_DIVIDER}` : undefined,
+                          }}
+                        >
+                          {future ? '' : v == null ? DASH : fmtByUnit(v, row.unit)}
+                        </td>
+                      );
+                    })}
                     <td
                       style={{
                         textAlign: 'right',
                         fontSize: 13,
-                        padding: '7px 16px',
+                        fontWeight: 700,
+                        padding: '7px 14px',
                         borderLeft: `1px solid ${C.border}`,
-                        color: C.muted,
+                        color: ytd == null ? C.gray400 : C.text,
                       }}
                     >
                       {ytd == null ? DASH : fmtByUnit(ytd, row.unit)}
@@ -1442,47 +1575,77 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD' }) {
               );
             }
 
-            // calc row
+            // calc row — total/subtotal styling: light brand-blue tint + bold.
+            const heatNums = row.heat ? sparkValues(row.values).filter(isNum) : null;
             return (
-              <tr key={`c${ri}`} style={{ background: calcBg }}>
+              <tr key={`c${ri}`} style={{ background: CALC_ROW_BG }}>
                 <td
                   style={{
                     textAlign: 'left',
                     fontSize: 13,
-                    fontWeight: 600,
-                    padding: '9px 16px',
+                    fontWeight: 700,
+                    padding: '9px 14px',
                     whiteSpace: 'nowrap',
                     position: 'sticky',
                     left: 0,
-                    background: calcLabelBg,
+                    background: CALC_LABEL_BG,
+                    zIndex: 1,
                   }}
                 >
                   {row.label}
                   {row.formula && <InfoTip text={row.formula} />}
                 </td>
-                {row.values.map((v, i) => (
-                  <td
-                    key={i}
-                    style={{
-                      textAlign: 'right',
-                      fontSize: 13,
-                      fontWeight: 600,
-                      padding: '9px 10px',
-                      color: row.negRed && isNum(v) && v < 0 ? C.red : undefined,
-                      background: isFuture(i) ? FUTURE_BG : undefined,
-                    }}
-                  >
-                    {v == null ? DASH : fmtByUnit(v, row.unit)}
-                  </td>
-                ))}
+                <td style={{ padding: '4px 8px', textAlign: 'center' }}>
+                  <Sparkline values={sparkValues(row.values)} color={C.primary} strokeWidth={1.8} />
+                </td>
+                {row.values.map((v, i) => {
+                  const future = isFuture(i);
+                  const heat = !future && row.heat ? heatCell(heatNums, v) : null;
+                  let color;
+                  let weight = 600;
+                  if (heat) {
+                    color = heat.color;
+                    weight = isCurrent(i) ? 700 : 600;
+                  } else if (row.negRed && isNum(v) && v < 0) {
+                    color = C.red;
+                  } else if (isCurrent(i)) {
+                    color = C.primary;
+                    weight = 700;
+                  }
+                  return (
+                    <td
+                      key={i}
+                      style={{
+                        textAlign: 'right',
+                        fontSize: 13,
+                        fontWeight: weight,
+                        padding: '9px 8px',
+                        color,
+                        background: future
+                          ? UP_BAND_TOTAL
+                          : heat
+                          ? heat.background
+                          : undefined,
+                        borderLeft: firstFuture(i) ? `1px solid ${UP_DIVIDER}` : undefined,
+                      }}
+                    >
+                      {future ? '' : v == null ? DASH : fmtByUnit(v, row.unit)}
+                    </td>
+                  );
+                })}
                 <td
                   style={{
                     textAlign: 'right',
                     fontSize: 13,
-                    fontWeight: 700,
-                    padding: '9px 16px',
+                    fontWeight: 800,
+                    padding: '9px 14px',
                     borderLeft: `1px solid ${C.border}`,
-                    color: row.negRed && isNum(row.ytd) && row.ytd < 0 ? C.red : undefined,
+                    color:
+                      row.negRed && isNum(row.ytd) && row.ytd < 0
+                        ? C.red
+                        : row.ytd == null
+                        ? C.gray400
+                        : C.text,
                   }}
                 >
                   {row.blankTotal
@@ -1704,10 +1867,18 @@ function DownloadsTab({ yearData, updateMetric, allYears, activeYear }) {
     ),
   ];
 
-  const storeData = monthChartDataSplit(
-    Object.fromEntries(STORE_KEYS.map(([key, label]) => [label, rawSeries(yearData, key)])),
-    latest
-  );
+  // 100%-stacked share of new installs per store, by month. Share reads cleanly
+  // even when one store dominates a single month (e.g. an OEM pre-install spike).
+  const storeShareData = IDX.map((i) => {
+    const vals = STORE_KEYS.map(([key]) => getVal(yearData, key, i));
+    const total = vals.reduce((acc, v) => acc + (v || 0), 0);
+    const reported = latest >= 0 && i <= latest;
+    const row = { m: MONTHS[i] };
+    STORE_KEYS.forEach(([key, label], idx) => {
+      row[label] = reported && total > 0 ? ((vals[idx] || 0) / total) * 100 : null;
+    });
+    return row;
+  });
 
   return (
     <div style={{ display: 'grid', gap: 16 }}>
@@ -1716,37 +1887,17 @@ function DownloadsTab({ yearData, updateMetric, allYears, activeYear }) {
         <MetricTable yearData={yearData} rows={rows} updateMetric={updateMetric} />
       </Card>
       <ChartCard title="Installs by Store" accent={C.blue}>
-        <LineChart data={storeData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+        <BarChart data={storeShareData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
           {upcomingRefs(latest)}
           <CartesianGrid {...GRID} />
           <XAxis {...X_AXIS} />
-          <YAxis {...yAxis()} />
-          <Tooltip content={<ChartTooltip fmt={fmtNumber} reported={latest} />} />
+          <YAxis {...yAxis({ domain: [0, 100], tickFormatter: (v) => `${v}%` })} />
+          <Tooltip content={<ChartTooltip fmt={fmtPercent} reported={latest} />} />
           <Legend wrapperStyle={{ fontSize: 11 }} itemSorter={null} />
-          {STORE_KEYS.flatMap(([key, label, color]) => [
-            <Line
-              key={label}
-              type="monotone"
-              dataKey={label}
-              stroke={color}
-              strokeWidth={2}
-              dot={false}
-              connectNulls
-            />,
-            <Line
-              key={`${label}__up`}
-              type="monotone"
-              dataKey={`${label}__up`}
-              stroke={color}
-              strokeOpacity={0.4}
-              strokeWidth={2}
-              strokeDasharray="6 6"
-              dot={false}
-              connectNulls
-              legendType="none"
-            />,
-          ])}
-        </LineChart>
+          {STORE_KEYS.map(([key, label, color]) => (
+            <Bar key={label} dataKey={label} stackId="s" fill={color} maxBarSize={44} />
+          ))}
+        </BarChart>
       </ChartCard>
     </div>
   );
@@ -1764,13 +1915,16 @@ function UsersTab({ yearData, updateMetric }) {
     { kind: 'subhead', label: 'Active Users' },
     { kind: 'input', key: 'u_dau', label: 'Daily Active Users', unit: 'count', ytd: 'avg' },
     { kind: 'input', key: 'u_mau', label: 'Monthly Active Users', unit: 'count', ytd: 'avg' },
-    calc(
-      'DAU / MAU Ratio',
-      'percent',
-      dauMau,
-      seriesAvg(dauMau),
-      'Stickiness — the share of monthly active users who use Sorted on an average day (DAU ÷ MAU). Higher means users return more often. A wallet used for daily payments should trend higher than one used only for occasional remittance.'
-    ),
+    {
+      ...calc(
+        'DAU / MAU Ratio',
+        'percent',
+        dauMau,
+        seriesAvg(dauMau),
+        'Stickiness — the share of monthly active users who use Sorted on an average day (DAU ÷ MAU). Higher means users return more often. A wallet used for daily payments should trend higher than one used only for occasional remittance.'
+      ),
+      heat: true,
+    },
     { kind: 'subhead', label: 'Cohort Retention' },
     {
       kind: 'input',
@@ -1778,6 +1932,7 @@ function UsersTab({ yearData, updateMetric }) {
       label: 'D1 Retention',
       unit: 'percent',
       ytd: 'none',
+      heat: true,
       info: 'Of users who installed this month, the share who returned the next day.',
     },
     {
@@ -1786,6 +1941,7 @@ function UsersTab({ yearData, updateMetric }) {
       label: 'D7 Retention',
       unit: 'percent',
       ytd: 'none',
+      heat: true,
       info: 'Of users who installed this month, the share who returned 7 days later.',
     },
     {
@@ -1794,6 +1950,7 @@ function UsersTab({ yearData, updateMetric }) {
       label: 'D30 Retention',
       unit: 'percent',
       ytd: 'none',
+      heat: true,
       info: 'Of users who installed this month, the share who returned 30 days later.',
     },
   ];
@@ -1876,7 +2033,10 @@ function TransactionsTab({ yearData, updateMetric, allYears, activeYear }) {
     { kind: 'subhead', label: 'Off-Ramp Health' },
     { kind: 'input', key: 'tx_offrampAttempts', label: 'Cash-Out Attempts', unit: 'count' },
     { kind: 'input', key: 'tx_offrampSuccessful', label: 'Successful Cash-Outs', unit: 'count' },
-    calc('Off-Ramp Success Rate', 'percent', successRate, pct(sucY, attY), 'Successful ÷ attempts.'),
+    {
+      ...calc('Off-Ramp Success Rate', 'percent', successRate, pct(sucY, attY), 'Successful ÷ attempts.'),
+      heat: true,
+    },
   ];
 
   const volData = monthChartData({
@@ -2098,31 +2258,31 @@ function LifetimeSummary({ calculated, manual }) {
     flex: '1 1 0',
     minWidth: 160,
     border: `1px solid ${C.border}`,
-    borderRadius: 10,
-    padding: '12px 14px',
-    background: C.gray100,
+    borderRadius: 14,
+    padding: '18px 20px',
+    background: C.card,
   };
   const labelStyle = {
-    fontSize: 10,
-    fontWeight: 500,
-    letterSpacing: '0.08em',
+    fontSize: 10.5,
+    fontWeight: 600,
+    letterSpacing: '0.05em',
     textTransform: 'uppercase',
     color: C.muted,
     display: 'flex',
     alignItems: 'center',
   };
-  const valueStyle = { fontFamily: 'var(--font-head)', fontSize: 22, fontWeight: 600, marginTop: 6 };
+  const valueStyle = { fontFamily: 'var(--font-head)', fontSize: 28, fontWeight: 700, marginTop: 8 };
 
   return (
     <div style={{ marginTop: 18 }}>
       <div
         style={{
-          fontSize: 12,
+          fontSize: 10.5,
           fontWeight: 700,
           letterSpacing: '0.06em',
           textTransform: 'uppercase',
-          color: C.text,
-          padding: '0 0 10px',
+          color: C.primary,
+          padding: '0 0 12px',
         }}
       >
         Lifetime
@@ -2146,8 +2306,8 @@ function LifetimeSummary({ calculated, manual }) {
               onCommit={manual.onCommit}
               inputStyle={{
                 fontFamily: 'var(--font-head)',
-                fontSize: 22,
-                fontWeight: 600,
+                fontSize: 28,
+                fontWeight: 700,
                 textAlign: 'left',
                 padding: 0,
               }}
@@ -2199,8 +2359,7 @@ function MarketSummaryTable({ yearData, updateMetric }) {
         textAlign: 'right',
         fontSize: 13,
         fontWeight: bold ? 700 : 600,
-        padding: '9px 12px',
-        background: C.gray200,
+        padding: '13px 12px',
       }}
     >
       {val == null ? DASH : fmtByUnit(val, unit)}
@@ -2209,7 +2368,7 @@ function MarketSummaryTable({ yearData, updateMetric }) {
 
   // Averaging manual per-country rates isn't meaningful, so the Total row's
   // rate columns are intentionally left blank.
-  const blankCell = () => <td style={{ background: C.gray200, padding: '9px 12px' }} />;
+  const blankCell = () => <td style={{ padding: '13px 12px' }} />;
 
   const editCell = (key, unit) => (
     <td style={{ textAlign: 'right', padding: '4px 8px' }}>
@@ -2221,23 +2380,29 @@ function MarketSummaryTable({ yearData, updateMetric }) {
     <div style={{ marginTop: 18 }}>
       <div
         style={{
-          fontSize: 12,
+          fontSize: 10.5,
           fontWeight: 700,
           letterSpacing: '0.06em',
           textTransform: 'uppercase',
-          color: C.text,
-          padding: '0 0 2px',
+          color: C.primary,
+          padding: '0 0 4px',
         }}
       >
         By Country
       </div>
-      <div style={{ fontSize: 12, color: C.muted, marginBottom: 10 }}>
+      <div style={{ fontSize: 12, color: C.muted, marginBottom: 12 }}>
         The cumulative totals per country.
       </div>
-      <div style={{ overflowX: 'auto' }}>
+      <div
+        style={{
+          overflowX: 'auto',
+          border: `1px solid ${C.border}`,
+          borderRadius: 16,
+        }}
+      >
         <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 720 }}>
           <thead>
-            <tr style={{ borderBottom: `1px solid ${C.border}` }}>
+            <tr style={{ background: C.gray100 }}>
               {headCell('Country', true)}
               {headCell('Cards Sold')}
               {headCell('Cards Volume')}
@@ -2248,8 +2413,8 @@ function MarketSummaryTable({ yearData, updateMetric }) {
           </thead>
           <tbody>
             {MARKETS.map((mk) => (
-              <tr key={mk.name} style={{ borderBottom: `1px solid ${C.bg}` }}>
-                <td style={{ textAlign: 'left', fontSize: 13, padding: '7px 16px', whiteSpace: 'nowrap' }}>
+              <tr key={mk.name} style={{ borderTop: `1px solid ${C.gray200}` }}>
+                <td style={{ textAlign: 'left', fontSize: 13, fontWeight: 500, padding: '7px 16px', whiteSpace: 'nowrap' }}>
                   {mk.name}
                 </td>
                 {editCell(mk.sold, 'count')}
@@ -2259,8 +2424,8 @@ function MarketSummaryTable({ yearData, updateMetric }) {
                 {editCell(mk.cac, 'ratio')}
               </tr>
             ))}
-            <tr style={{ borderTop: `1px solid ${C.border}` }}>
-              <td style={{ textAlign: 'left', fontSize: 13, fontWeight: 700, padding: '9px 16px' }}>Total</td>
+            <tr style={{ borderTop: `1px solid ${C.border}`, background: CALC_ROW_BG }}>
+              <td style={{ textAlign: 'left', fontSize: 13, fontWeight: 700, padding: '13px 16px' }}>Total</td>
               {numCell(tSold, 'count', true)}
               {numCell(tValue, 'usdt', true)}
               {numCell(tUsers, 'count', true)}
@@ -2359,43 +2524,302 @@ function RevenueTab({ yearData, updateMetric }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Campaigns tab (stub) — holds the relocated Acquisition section for now;
-// per-campaign tracking (spend / CAC / ROI by channel) comes in a later phase.
+// Campaigns tab — a manual KPI strip over an editable campaign list. Every
+// field (KPIs included) is entered by hand for now; attribution and computed
+// CPI come in a later phase. Data lives on the year as `campaignKpis` +
+// `campaigns` (free-form, persisted via updateYearField).
 // ─────────────────────────────────────────────────────────────────────────────
-function CampaignsTab({ yearData, updateMetric }) {
-  const latest = latestMonthIndex(yearData);
-  const storeKeys = STORE_KEYS.map((s) => s[0]);
-  const acqKeys = ['dl_ambassadorCosts', 'dl_paidCampaignSpend'];
+const CAMPAIGN_KPIS = [
+  { key: 'active', label: 'Active Campaigns', unit: 'count' },
+  { key: 'spend', label: 'Total Spend', unit: 'usd' },
+  { key: 'installs', label: 'Attributed Installs', unit: 'count' },
+  { key: 'cpi', label: 'Blended CPI', unit: 'ratio' },
+];
 
-  const newDownloads = sumSeries(yearData, storeKeys);
-  const newUsers = rawSeries(yearData, 'u_newUsers');
-  const totalMarketing = sumSeries(yearData, acqKeys);
-  const cpnd = ratioSeries(totalMarketing, newDownloads);
-  const cpnu = ratioSeries(totalMarketing, newUsers);
+const CAMPAIGN_STATUSES = ['Active', 'Paused', 'Ended'];
+const STATUS_STYLE = {
+  Active: { background: 'rgba(31,138,77,0.12)', color: '#1f8a4d' },
+  Paused: { background: 'rgba(160,140,40,0.14)', color: '#9a7a10' },
+  Ended: { background: 'rgba(120,120,130,0.12)', color: '#6a6a74' },
+};
 
-  const ndY = seriesSum(newDownloads, latest);
-  const nuY = seriesSum(newUsers, latest);
-  const tmY = seriesSum(totalMarketing, latest);
+function newCampaignId(existing) {
+  // Stable-enough unique id without colliding with existing rows.
+  let n = existing.length + 1;
+  const has = (id) => existing.some((c) => c.id === id);
+  while (has(`camp_${n}`)) n += 1;
+  return `camp_${n}`;
+}
 
-  const rows = [
-    { kind: 'subhead', label: 'Acquisition' },
-    { kind: 'input', key: 'dl_ambassadorCosts', label: 'Ambassador Costs', unit: 'usd' },
-    { kind: 'input', key: 'dl_paidCampaignSpend', label: 'Paid Campaign Spend', unit: 'usd' },
-    calc('Total Marketing Spend', 'usd', totalMarketing, tmY, 'Ambassador costs + paid campaign spend.'),
-    calc('Cost Per New Install', 'ratio', cpnd, safeDiv(tmY, ndY), 'Total marketing spend ÷ new installs.'),
-    calc('Cost Per New User', 'ratio', cpnu, safeDiv(tmY, nuY), 'Total marketing spend ÷ new users.'),
-  ];
+function StatusPill({ status }) {
+  const s = STATUS_STYLE[status] || STATUS_STYLE.Ended;
+  return (
+    <span
+      style={{
+        ...s,
+        padding: '4px 11px',
+        borderRadius: 20,
+        fontSize: 11,
+        fontWeight: 700,
+      }}
+    >
+      {status}
+    </span>
+  );
+}
+
+// A free-text cell used for campaign name / channel (the metric Cell is numeric
+// only). Mirrors Cell's read-only behaviour for Members.
+function TextCell({ value, placeholder, onCommit, bold }) {
+  const editable = useContext(EditableContext);
+  const [draft, setDraft] = useState(null);
+  if (!editable) {
+    return (
+      <span style={{ fontSize: 13, fontWeight: bold ? 600 : 400, color: value ? C.text : C.gray400 }}>
+        {value || DASH}
+      </span>
+    );
+  }
+  return (
+    <input
+      value={draft == null ? value || '' : draft}
+      placeholder={placeholder}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={() => {
+        if (draft != null) onCommit(draft.trim());
+        setDraft(null);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') e.currentTarget.blur();
+      }}
+      style={{
+        width: '100%',
+        fontFamily: 'inherit',
+        fontSize: 13,
+        fontWeight: bold ? 600 : 400,
+        color: C.text,
+        background: 'transparent',
+        border: 'none',
+        borderBottom: `1px dashed ${C.gray300}`,
+        padding: '5px 2px',
+        outline: 'none',
+      }}
+    />
+  );
+}
+
+function CampaignsTab({ yearData, updateYearField }) {
+  const editable = useContext(EditableContext);
+  const campaigns = Array.isArray(yearData.campaigns) ? yearData.campaigns : [];
+  const kpis = yearData.campaignKpis || {};
+
+  const setKpi = (key, value) => updateYearField('campaignKpis', { ...kpis, [key]: value });
+  const setCampaigns = (next) => updateYearField('campaigns', next);
+  const updateRow = (id, patch) =>
+    setCampaigns(campaigns.map((c) => (c.id === id ? { ...c, ...patch } : c)));
+  const addRow = () =>
+    setCampaigns([
+      ...campaigns,
+      {
+        id: newCampaignId(campaigns),
+        name: '',
+        channel: '',
+        spend: null,
+        installs: null,
+        cpi: null,
+        conv: null,
+        status: 'Active',
+      },
+    ]);
+  const removeRow = (id) => setCampaigns(campaigns.filter((c) => c.id !== id));
+
+  const th = (label, align = 'right', pad = '13px 12px') => (
+    <th style={{ ...thBase, textAlign: align, padding: pad }}>{label}</th>
+  );
+  const numTd = (row, key, unit) => (
+    <td style={{ textAlign: 'right', padding: '6px 8px' }}>
+      <Cell value={row[key]} unit={unit} onCommit={(v) => updateRow(row.id, { [key]: v })} />
+    </td>
+  );
 
   return (
     <div style={{ display: 'grid', gap: 16 }}>
       <Card accent={C.primary}>
-        <TabTitle title="Campaigns" accent={C.blue} />
-        <p style={{ fontSize: 13, color: C.muted, marginTop: 0, marginBottom: 16 }}>
-          Per-campaign tracking — individual campaign spend, CAC and ROI by
-          channel — is coming soon. For now, overall acquisition spend and the
-          blended cost metrics live here.
+        <TabTitle title="Campaigns" accent={C.blue} downloadLabel="Download all" />
+        <p style={{ fontSize: 13, color: C.muted, marginTop: -4, marginBottom: 16 }}>
+          Acquisition campaigns and performance. All figures are entered manually
+          for now — attribution and computed CPI come in a later phase.
         </p>
-        <MetricTable yearData={yearData} rows={rows} updateMetric={updateMetric} />
+
+        {/* KPI strip — manual headline figures */}
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+            gap: 14,
+          }}
+        >
+          {CAMPAIGN_KPIS.map((k) => (
+            <div
+              key={k.key}
+              style={{
+                background: C.card,
+                border: `1px solid ${C.border}`,
+                borderRadius: 14,
+                padding: '16px 18px',
+              }}
+            >
+              <div
+                style={{
+                  fontSize: 10.5,
+                  fontWeight: 600,
+                  letterSpacing: '0.05em',
+                  textTransform: 'uppercase',
+                  color: C.muted,
+                }}
+              >
+                {k.label}
+              </div>
+              <div style={{ marginTop: 8 }}>
+                <Cell
+                  value={kpis[k.key] == null ? null : kpis[k.key]}
+                  unit={k.unit}
+                  onCommit={(v) => setKpi(k.key, v)}
+                  inputStyle={{
+                    fontFamily: 'var(--font-head)',
+                    fontSize: 26,
+                    fontWeight: 700,
+                    textAlign: 'left',
+                    padding: 0,
+                  }}
+                />
+              </div>
+            </div>
+          ))}
+        </div>
+      </Card>
+
+      {/* Campaign list */}
+      <Card accent={C.primary} style={{ padding: 0, overflow: 'hidden' }}>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 820 }}>
+            <thead>
+              <tr style={{ background: C.gray100 }}>
+                {th('Campaign', 'left', '13px 16px')}
+                {th('Channel', 'left')}
+                {th('Spend')}
+                {th('Installs')}
+                {th('CPI')}
+                {th('Conv.')}
+                {th('Status')}
+                {editable && <th style={{ ...thBase, width: 36, padding: '13px 8px' }} />}
+              </tr>
+            </thead>
+            <tbody>
+              {campaigns.length === 0 ? (
+                <tr style={{ borderTop: `1px solid ${C.gray200}` }}>
+                  <td
+                    colSpan={editable ? 8 : 7}
+                    style={{ padding: '20px 16px', color: C.muted, fontSize: 13, textAlign: 'center' }}
+                  >
+                    No campaigns yet.{editable ? ' Add one below to get started.' : ''}
+                  </td>
+                </tr>
+              ) : (
+                campaigns.map((row) => (
+                  <tr key={row.id} style={{ borderTop: `1px solid ${C.gray200}` }}>
+                    <td style={{ textAlign: 'left', padding: '6px 16px', minWidth: 150 }}>
+                      <TextCell
+                        value={row.name}
+                        placeholder="Campaign name"
+                        bold
+                        onCommit={(v) => updateRow(row.id, { name: v })}
+                      />
+                    </td>
+                    <td style={{ textAlign: 'left', padding: '6px 12px', minWidth: 110 }}>
+                      <TextCell
+                        value={row.channel}
+                        placeholder="Channel"
+                        onCommit={(v) => updateRow(row.id, { channel: v })}
+                      />
+                    </td>
+                    {numTd(row, 'spend', 'usd')}
+                    {numTd(row, 'installs', 'count')}
+                    {numTd(row, 'cpi', 'ratio')}
+                    {numTd(row, 'conv', 'percent')}
+                    <td style={{ textAlign: 'right', padding: '6px 12px' }}>
+                      {editable ? (
+                        <select
+                          value={row.status || 'Active'}
+                          onChange={(e) => updateRow(row.id, { status: e.target.value })}
+                          style={{
+                            ...(STATUS_STYLE[row.status] || STATUS_STYLE.Active),
+                            border: 'none',
+                            borderRadius: 20,
+                            padding: '4px 10px',
+                            fontSize: 11,
+                            fontWeight: 700,
+                            fontFamily: 'inherit',
+                            cursor: 'pointer',
+                            outline: 'none',
+                          }}
+                        >
+                          {CAMPAIGN_STATUSES.map((s) => (
+                            <option key={s} value={s}>
+                              {s}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <StatusPill status={row.status || 'Active'} />
+                      )}
+                    </td>
+                    {editable && (
+                      <td style={{ textAlign: 'center', padding: '6px 8px' }}>
+                        <button
+                          type="button"
+                          onClick={() => removeRow(row.id)}
+                          title="Remove campaign"
+                          style={{
+                            border: 'none',
+                            background: 'transparent',
+                            color: C.gray400,
+                            cursor: 'pointer',
+                            fontSize: 16,
+                            lineHeight: 1,
+                            padding: 2,
+                          }}
+                        >
+                          ×
+                        </button>
+                      </td>
+                    )}
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+        {editable && (
+          <div style={{ padding: '12px 16px', borderTop: `1px solid ${C.gray200}` }}>
+            <button
+              type="button"
+              onClick={addRow}
+              style={{
+                border: `1px solid ${C.border}`,
+                background: '#fff',
+                borderRadius: 8,
+                padding: '7px 14px',
+                fontSize: 13,
+                fontWeight: 600,
+                color: C.primary,
+                cursor: 'pointer',
+              }}
+            >
+              + Add campaign
+            </button>
+          </div>
+        )}
       </Card>
     </div>
   );
@@ -3086,6 +3510,7 @@ function TabContent({
   canEdit,
   updateMetric,
   updateNote,
+  updateYearField,
   allYears,
 }) {
   const common = { yearData, activeYear, updateMetric, updateNote, allYears };
@@ -3101,7 +3526,7 @@ function TabContent({
     case 'Costs & Revenue':
       return <RevenueTab {...common} />;
     case 'Campaigns':
-      return <CampaignsTab {...common} />;
+      return <CampaignsTab yearData={yearData} updateYearField={updateYearField} />;
     case 'Settings':
       return <SettingsTab user={user} setUser={setUser} canEdit={canEdit} />;
     case 'Dashboard':

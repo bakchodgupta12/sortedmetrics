@@ -258,11 +258,14 @@ export const ALL_METRIC_KEYS = Object.values(METRIC_GROUPS)
   .flat()
   .flatMap((group) => group.metrics.map((m) => m.key));
 
-// A fresh, empty year: every metric is an empty month→number map, plus notes.
+// A fresh, empty year: every metric is an empty month→number map, plus notes
+// and the Campaigns tab's manual data (a campaign list + a manual KPI strip).
 export function emptyYear() {
   const year = {};
   for (const key of ALL_METRIC_KEYS) year[key] = {};
   year.notes = {};
+  year.campaigns = [];
+  year.campaignKpis = {};
   return year;
 }
 
@@ -287,6 +290,14 @@ export function normaliseData(data) {
       }
       if (yearData.notes && typeof yearData.notes === 'object') {
         base.notes = { ...yearData.notes };
+      }
+      // Campaigns tab — a manual campaign list and KPI strip (free-form, so
+      // carried through as-is rather than coerced to the metric/month grid).
+      if (Array.isArray(yearData.campaigns)) {
+        base.campaigns = yearData.campaigns.filter((c) => c && typeof c === 'object');
+      }
+      if (yearData.campaignKpis && typeof yearData.campaignKpis === 'object') {
+        base.campaignKpis = { ...yearData.campaignKpis };
       }
     }
     out.years[year] = base;
