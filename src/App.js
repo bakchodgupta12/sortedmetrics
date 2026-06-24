@@ -597,21 +597,19 @@ function Dashboard({ user, setUser, onLogout }) {
     <EditableContext.Provider value={canEdit}>
       <div style={{ minHeight: '100vh' }}>
         <TopNav
-          saveStatus={saveStatus}
-          lastUpdated={lastUpdated}
-          onRefresh={refresh}
-          onLogout={onLogout}
-          onOpenSettings={() => setActiveTab('Settings')}
-          settingsActive={activeTab === 'Settings'}
-        />
-        <TabBar
+          user={user}
           activeTab={activeTab}
-          onChange={setActiveTab}
+          onTabChange={setActiveTab}
           years={years}
           activeYear={activeYear}
           onYearChange={setActiveYear}
           onAddYear={addYear}
           canAddYear={canEdit}
+          saveStatus={saveStatus}
+          lastUpdated={lastUpdated}
+          onRefresh={refresh}
+          onOpenSettings={() => setActiveTab('Settings')}
+          onLogout={onLogout}
         />
 
         <main
@@ -661,9 +659,109 @@ function fmtDate(iso) {
   return `${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear()}`;
 }
 
-function TopNav({ saveStatus, lastUpdated, onRefresh, onLogout, onOpenSettings, settingsActive }) {
+// Round avatar button (user's initial) opening a menu: account info, refresh,
+// settings, and log out.
+function ProfileMenu({ user, lastUpdated, onRefresh, onOpenSettings, onLogout }) {
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (!open) return;
+    const close = () => setOpen(false);
+    document.addEventListener('click', close);
+    return () => document.removeEventListener('click', close);
+  }, [open]);
+
+  const name = (user.display_name && user.display_name.trim()) || user.username;
+  const initial = (name[0] || '?').toUpperCase();
+  const lu = fmtDate(lastUpdated);
+
+  return (
+    <div style={{ position: 'relative', flexShrink: 0 }}>
+      <button
+        type="button"
+        title="Account"
+        aria-label="Account"
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen((o) => !o);
+        }}
+        style={{
+          width: 34,
+          height: 34,
+          borderRadius: '50%',
+          border: `1px solid ${open ? C.primary : C.border}`,
+          background: C.primary,
+          color: '#fff',
+          fontFamily: 'var(--font-head)',
+          fontWeight: 700,
+          fontSize: 14,
+          cursor: 'pointer',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        {initial}
+      </button>
+      {open && (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            position: 'absolute',
+            top: 42,
+            right: 0,
+            zIndex: 40,
+            background: '#fff',
+            border: `1px solid ${C.border}`,
+            borderRadius: 12,
+            boxShadow: '0 8px 24px rgba(0,0,0,0.12)',
+            padding: 6,
+            minWidth: 210,
+          }}
+        >
+          <div style={{ padding: '8px 12px 10px' }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{name}</div>
+            <div style={{ fontSize: 12, color: C.muted, marginTop: 1 }}>{roleLabel(user.role)}</div>
+            {lu && <div style={{ fontSize: 11.5, color: C.muted, marginTop: 6 }}>Last updated: {lu}</div>}
+          </div>
+          <div style={{ height: 1, background: C.border, margin: '2px 0 4px' }} />
+          <MenuItem onClick={() => { setOpen(false); onRefresh(); }}>Refresh data</MenuItem>
+          <MenuItem onClick={() => { setOpen(false); onOpenSettings(); }}>Settings</MenuItem>
+          <MenuItem danger onClick={() => { setOpen(false); onLogout(); }}>Log out</MenuItem>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Single top bar: Sorted wordmark (left), the tabs (centre), and on the right
+// the year selector + a profile menu (Settings / Log out live in the menu).
+function TopNav({
+  user,
+  activeTab,
+  onTabChange,
+  years,
+  activeYear,
+  onYearChange,
+  onAddYear,
+  canAddYear,
+  saveStatus,
+  lastUpdated,
+  onRefresh,
+  onOpenSettings,
+  onLogout,
+}) {
   const statusLabel = saveStatusLabel(saveStatus);
-  const lastUpdatedLabel = fmtDate(lastUpdated);
+
+  const addNewYear = () => {
+    const input = window.prompt('Add year (e.g. 2027):');
+    if (!input) return;
+    const year = parseInt(input, 10);
+    if (Number.isNaN(year) || year < 2000 || year > 2100) {
+      window.alert('Please enter a valid year.');
+      return;
+    }
+    onAddYear(year);
+  };
 
   return (
     <header
@@ -680,152 +778,37 @@ function TopNav({ saveStatus, lastUpdated, onRefresh, onLogout, onOpenSettings, 
         style={{
           maxWidth: 1120,
           margin: '0 auto',
-          padding: '12px 20px',
-          display: 'grid',
-          gridTemplateColumns: '1fr auto 1fr',
+          padding: '10px 20px',
+          display: 'flex',
           alignItems: 'center',
+          justifyContent: 'space-between',
           gap: 16,
         }}
       >
-        {/* Left — Sorted wordmark. Pulled left by the SVG's internal left
-            whitespace so its glyphs hang on the shared 20px content gridline. */}
-        <div style={{ display: 'flex', alignItems: 'center' }}>
-          <img
-            src={`${process.env.PUBLIC_URL}/sorted-wordmark.svg`}
-            alt="Sorted"
-            style={{ height: 22, width: 'auto', display: 'block', marginLeft: -6.5 }}
-          />
-        </div>
+        {/* Left — Sorted wordmark, pulled left so its glyphs hang on the gridline. */}
+        <img
+          src={`${process.env.PUBLIC_URL}/sorted-wordmark.svg`}
+          alt="Sorted"
+          style={{ height: 22, width: 'auto', display: 'block', marginLeft: -6.5, flexShrink: 0 }}
+        />
 
-        {/* Center — dashboard title (brand sits in the wordmark on the left). */}
-        <div style={{ textAlign: 'center' }}>
-          <span
-            style={{
-              fontFamily: 'var(--font-head)',
-              fontSize: 16,
-              fontWeight: 600,
-              color: C.text,
-              whiteSpace: 'nowrap',
-            }}
-          >
-            Metrics Dashboard
-          </span>
-        </div>
-
-        {/* Right — save status, team-wide freshness, refresh, settings, logout. */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 10 }}>
-          {statusLabel && (
-            <span style={{ fontSize: 12, color: saveStatus === 'error' ? C.red : C.muted }}>
-              {statusLabel}
-            </span>
-          )}
-          {lastUpdatedLabel && (
-            <span style={{ fontSize: 12, color: C.muted, whiteSpace: 'nowrap' }}>
-              Last updated: {lastUpdatedLabel}
-            </span>
-          )}
-          <button
-            onClick={onRefresh}
-            title="Refresh from server"
-            style={{
-              border: `1px solid ${C.border}`,
-              background: '#fff',
-              borderRadius: 7,
-              width: 28,
-              height: 28,
-              lineHeight: 1,
-            }}
-          >
-            ↻
-          </button>
-          <button
-            onClick={onOpenSettings}
-            title="Settings"
-            aria-label="Settings"
-            style={{
-              border: `1px solid ${settingsActive ? C.primary : C.border}`,
-              background: settingsActive ? 'rgba(0,17,168,0.10)' : '#fff',
-              color: settingsActive ? C.primary : C.text,
-              borderRadius: 8,
-              width: 32,
-              height: 32,
-              fontSize: 16,
-              lineHeight: 1,
-            }}
-          >
-            ⚙
-          </button>
-          <button
-            onClick={onLogout}
-            style={{
-              border: `1px solid ${C.border}`,
-              background: '#fff',
-              borderRadius: 8,
-              padding: '6px 12px',
-              fontSize: 13,
-            }}
-          >
-            Logout
-          </button>
-        </div>
-      </div>
-    </header>
-  );
-}
-
-function TabBar({ activeTab, onChange, years, activeYear, onYearChange, onAddYear, canAddYear }) {
-  const addNewYear = () => {
-    const input = window.prompt('Add year (e.g. 2027):');
-    if (!input) return;
-    const year = parseInt(input, 10);
-    if (Number.isNaN(year) || year < 2000 || year > 2100) {
-      window.alert('Please enter a valid year.');
-      return;
-    }
-    onAddYear(year);
-  };
-
-  return (
-    <nav
-      style={{
-        position: 'sticky',
-        top: 53,
-        zIndex: 19,
-        background: 'rgba(247,245,240,0.92)',
-        backdropFilter: 'blur(8px)',
-        borderBottom: `1px solid ${C.border}`,
-      }}
-    >
-      <div
-        style={{
-          maxWidth: 1120,
-          margin: '0 auto',
-          padding: '0 20px',
-          display: 'flex',
-          alignItems: 'center',
-          gap: 12,
-        }}
-      >
-        <div style={{ display: 'flex', gap: 4, overflowX: 'auto', flex: 1 }}>
-          {TABS.map((tab, i) => {
+        {/* Centre — tab navigation. */}
+        <nav style={{ display: 'flex', gap: 6, overflowX: 'auto', flex: 1, justifyContent: 'center' }}>
+          {TABS.map((tab) => {
             const active = tab === activeTab;
             return (
               <button
                 key={tab}
-                onClick={() => onChange(tab)}
+                onClick={() => onTabChange(tab)}
                 style={{
                   background: 'none',
                   border: 'none',
-                  // First tab hangs flush on the shared left gridline (no left
-                  // inset) so it lines up with the wordmark and page content.
-                  padding: i === 0 ? '12px 12px 12px 0' : '12px 12px',
+                  padding: '6px 8px',
+                  fontFamily: 'var(--font-head)',
                   fontSize: 14,
                   fontWeight: active ? 700 : 500,
                   color: active ? C.primary : C.muted,
-                  borderBottom: active
-                    ? `2px solid ${C.primary}`
-                    : '2px solid transparent',
-                  marginBottom: -1,
+                  cursor: 'pointer',
                   whiteSpace: 'nowrap',
                 }}
               >
@@ -833,39 +816,54 @@ function TabBar({ activeTab, onChange, years, activeYear, onYearChange, onAddYea
               </button>
             );
           })}
-        </div>
+        </nav>
 
-        <select
-          value={activeYear}
-          onChange={(e) => {
-            if (e.target.value === '__add__') addNewYear();
-            else onYearChange(Number(e.target.value));
-          }}
-          style={{
-            flexShrink: 0,
-            width: 'auto',
-            appearance: 'none',
-            WebkitAppearance: 'none',
-            MozAppearance: 'none',
-            padding: '6px 30px 6px 12px',
-            borderRadius: 8,
-            border: `1px solid ${C.border}`,
-            background: `#fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%237b7d84' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 11px center`,
-            fontFamily: 'inherit',
-            fontSize: 14,
-            fontWeight: 600,
-            cursor: 'pointer',
-          }}
-        >
-          {years.map((y) => (
-            <option key={y} value={y}>
-              {y}
-            </option>
-          ))}
-          {canAddYear && <option value="__add__">+ Add year…</option>}
-        </select>
+        {/* Right — save status, year selector, profile menu. */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 10, flexShrink: 0 }}>
+          {statusLabel && (
+            <span style={{ fontSize: 12, color: saveStatus === 'error' ? C.red : C.muted, whiteSpace: 'nowrap' }}>
+              {statusLabel}
+            </span>
+          )}
+          <select
+            value={activeYear}
+            onChange={(e) => {
+              if (e.target.value === '__add__') addNewYear();
+              else onYearChange(Number(e.target.value));
+            }}
+            style={{
+              flexShrink: 0,
+              width: 'auto',
+              appearance: 'none',
+              WebkitAppearance: 'none',
+              MozAppearance: 'none',
+              padding: '6px 30px 6px 12px',
+              borderRadius: 9,
+              border: `1px solid ${C.border}`,
+              background: `#fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%237b7d84' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 11px center`,
+              fontFamily: 'inherit',
+              fontSize: 13,
+              fontWeight: 600,
+              cursor: 'pointer',
+            }}
+          >
+            {years.map((y) => (
+              <option key={y} value={y}>
+                {y}
+              </option>
+            ))}
+            {canAddYear && <option value="__add__">+ Add year…</option>}
+          </select>
+          <ProfileMenu
+            user={user}
+            lastUpdated={lastUpdated}
+            onRefresh={onRefresh}
+            onOpenSettings={onOpenSettings}
+            onLogout={onLogout}
+          />
+        </div>
       </div>
-    </nav>
+    </header>
   );
 }
 
@@ -2785,18 +2783,19 @@ function DashboardTab({ allYears }) {
     border: `1px solid ${active ? C.primary : C.border}`,
     background: active ? C.primary : '#fff',
     color: active ? '#fff' : C.text,
-    borderRadius: 999,
-    padding: '6px 12px',
-    fontSize: 12,
+    borderRadius: 9,
+    padding: '7px 14px',
+    fontFamily: 'inherit',
+    fontSize: 12.5,
     fontWeight: 600,
     cursor: 'pointer',
     whiteSpace: 'nowrap',
   });
   const monthInput = {
     border: `1px solid ${C.border}`,
-    borderRadius: 8,
-    padding: '6px 10px',
-    fontSize: 12,
+    borderRadius: 9,
+    padding: '7px 10px',
+    fontSize: 12.5,
     fontFamily: 'inherit',
     color: C.text,
     background: '#fff',
@@ -2813,39 +2812,39 @@ function DashboardTab({ allYears }) {
         <DownloadButton label="Download all" />
       </div>
 
-      <Card accent={C.primary} style={{ padding: 14 }}>
-        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
-          {DASH_PRESETS.map(([key, label]) => {
-            if (key === 'allTime' && !presets.allTime) return null;
-            return (
-              <button key={key} style={pillStyle(sel === key)} onClick={() => selectPreset(key)}>
-                {label}
-              </button>
-            );
-          })}
-          <div style={{ width: 1, height: 22, background: C.border, margin: '0 4px' }} />
-          <span style={{ fontSize: 12, color: C.muted }}>From</span>
-          <input
-            type="month"
-            style={monthInput}
-            value={customFrom}
-            onChange={(e) => {
-              setCustomFrom(e.target.value);
-              setSel('custom');
-            }}
-          />
-          <span style={{ fontSize: 12, color: C.muted }}>To</span>
-          <input
-            type="month"
-            style={monthInput}
-            value={customTo}
-            onChange={(e) => {
-              setCustomTo(e.target.value);
-              setSel('custom');
-            }}
-          />
-        </div>
-      </Card>
+      {/* Date-range control — a clean toolbar: presets on the left, custom
+          From/To on the right. */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
+        {DASH_PRESETS.map(([key, label]) => {
+          if (key === 'allTime' && !presets.allTime) return null;
+          return (
+            <button key={key} style={pillStyle(sel === key)} onClick={() => selectPreset(key)}>
+              {label}
+            </button>
+          );
+        })}
+        <div style={{ flex: 1, minWidth: 8 }} />
+        <span style={{ fontSize: 12, color: C.muted }}>From</span>
+        <input
+          type="month"
+          style={monthInput}
+          value={customFrom}
+          onChange={(e) => {
+            setCustomFrom(e.target.value);
+            setSel('custom');
+          }}
+        />
+        <span style={{ fontSize: 12, color: C.muted }}>To</span>
+        <input
+          type="month"
+          style={monthInput}
+          value={customTo}
+          onChange={(e) => {
+            setCustomTo(e.target.value);
+            setSel('custom');
+          }}
+        />
+      </div>
 
       {/* Hero row — large headline totals in one card */}
       <div
