@@ -59,7 +59,7 @@ export function isValidPassword(password) {
   return /^\d{4,6}$/.test(String(password || ''));
 }
 
-export const ROLES = { OWNER: 'owner', MEMBER: 'member' };
+export const ROLES = { MASTER: 'master', OWNER: 'owner', MEMBER: 'member' };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Data model

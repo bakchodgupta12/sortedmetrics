@@ -77,9 +77,10 @@ insert into public.shared_metrics (id, data)
 values (1, '{"years": {}}'::jsonb)
 on conflict (id) do nothing;
 
--- Promote the oldest existing account (the founding account) to owner.
+-- Promote the oldest existing account (the founding account — Shishir) to the
+-- single top-level Master role.
 update public.metrics_data
-  set role = 'owner'
+  set role = 'master'
   where username = (
     select username from public.metrics_data order by created_at asc limit 1
   );

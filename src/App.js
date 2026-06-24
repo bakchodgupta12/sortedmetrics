@@ -410,8 +410,8 @@ function App() {
 const SAVE_DEBOUNCE_MS = 1500;
 
 function Dashboard({ user, setUser, onLogout }) {
-  // Owners can edit and manage the team; Members are read-only + download.
-  const canEdit = user.role === ROLES.OWNER;
+  // Master and Owners can edit and manage the team; Members are read-only.
+  const canEdit = user.role === ROLES.MASTER || user.role === ROLES.OWNER;
 
   // The metrics dataset is shared team-wide and loaded once on mount.
   const [data, setData] = useState(null);
@@ -2521,6 +2521,13 @@ const settingsSmallBtn = {
   cursor: 'pointer',
 };
 
+// 'master' → 'Master', 'owner' → 'Owner', anything else → 'Member'.
+function roleLabel(role) {
+  if (role === ROLES.MASTER) return 'Master';
+  if (role === ROLES.OWNER) return 'Owner';
+  return 'Member';
+}
+
 function SettingsTab({ user, setUser, canEdit }) {
   const [displayName, setDisplayName] = useState(user.display_name || '');
   const [msg, setMsg] = useState('');
@@ -2589,7 +2596,7 @@ function SettingsTab({ user, setUser, canEdit }) {
         </div>
         <div style={{ fontSize: 12, color: C.muted, marginTop: 8 }}>
           Username: <strong>{user.username}</strong> (cannot be changed) · Role:{' '}
-          <strong>{user.role === ROLES.OWNER ? 'Owner' : 'Member'}</strong>
+          <strong>{roleLabel(user.role)}</strong>
         </div>
         {msg && <p style={{ color: C.green, fontSize: 13 }}>{msg}</p>}
       </Card>
@@ -2640,10 +2647,37 @@ function SettingsTab({ user, setUser, canEdit }) {
   );
 }
 
-// Owner-only team management: list accounts, add members, promote Members to
-// Owner, and remove Members. Owners are protected peers — they cannot be
-// demoted or removed here, which prevents anyone from locking the team out.
+// Team management for Master and Owners. The role hierarchy is Master > Owner >
+// Member. The Master can manage everyone (and is itself protected); Owners can
+// manage Members only — never another Owner or the Master.
+function RoleBadge({ role }) {
+  const map = {
+    [ROLES.MASTER]: { background: C.primary, color: '#fff' },
+    [ROLES.OWNER]: { background: 'rgba(0,17,168,0.10)', color: C.primary },
+    [ROLES.MEMBER]: { background: C.gray200, color: C.gray600 },
+  };
+  const s = map[role] || map[ROLES.MEMBER];
+  return (
+    <span
+      style={{
+        fontSize: 10,
+        fontWeight: 700,
+        letterSpacing: '0.06em',
+        textTransform: 'uppercase',
+        padding: '3px 9px',
+        borderRadius: 999,
+        whiteSpace: 'nowrap',
+        ...s,
+      }}
+    >
+      {roleLabel(role)}
+    </span>
+  );
+}
+
 function TeamPanel({ user }) {
+  const isMaster = user.role === ROLES.MASTER;
+
   const [accounts, setAccounts] = useState(null);
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
@@ -2652,6 +2686,11 @@ function TeamPanel({ user }) {
   const [newPassword, setNewPassword] = useState('');
   const [newRole, setNewRole] = useState(ROLES.MEMBER);
   const [addMsg, setAddMsg] = useState('');
+
+  const [resetFor, setResetFor] = useState(null); // username with the reset form open
+  const [resetPw, setResetPw] = useState('');
+  const [resetErr, setResetErr] = useState('');
+  const [resetDone, setResetDone] = useState(null); // { username, name, pw }
 
   const settingInput = { ...authInput, maxWidth: 320, marginTop: 0 };
 
@@ -2667,6 +2706,26 @@ function TeamPanel({ user }) {
     reload();
   }, [reload]);
 
+  // The "Account created" / form messages auto-dismiss — the new row in the
+  // list above is the lasting confirmation.
+  useEffect(() => {
+    if (!addMsg) return;
+    const t = setTimeout(() => setAddMsg(''), 3500);
+    return () => clearTimeout(t);
+  }, [addMsg]);
+
+  const nameOf = (a) =>
+    a.display_name && a.display_name.trim() ? a.display_name.trim() : a.username;
+
+  // What the current user may do to a given account, per the hierarchy.
+  const actionsFor = (a) => {
+    if (a.role === ROLES.MASTER) return { protected: true };
+    if (a.role === ROLES.OWNER) {
+      return isMaster ? { demote: true, reset: true, remove: true } : { protected: true };
+    }
+    return { promote: true, reset: true, remove: true }; // Member
+  };
+
   const addMember = async () => {
     setAddMsg('');
     const uname = newUsername.trim().toLowerCase();
@@ -2678,9 +2737,11 @@ function TeamPanel({ user }) {
       setAddMsg(`Password must be ${PASSWORD_RULE}.`);
       return;
     }
+    // Owners may only create Members; the Owner option is hidden for them too.
+    const role = isMaster && newRole === ROLES.OWNER ? ROLES.OWNER : ROLES.MEMBER;
     setBusy(true);
     try {
-      await createAccount({ username: uname, password: newPassword, displayName: uname, role: newRole });
+      await createAccount({ username: uname, password: newPassword, displayName: uname, role });
       setNewUsername('');
       setNewPassword('');
       setNewRole(ROLES.MEMBER);
@@ -2694,11 +2755,12 @@ function TeamPanel({ user }) {
     }
   };
 
-  const promote = async (account) => {
+  const changeRole = async (a, role, confirmMsg) => {
     setErr('');
+    if (!window.confirm(confirmMsg)) return;
     setBusy(true);
     try {
-      await setAccountRole(account.username, ROLES.OWNER);
+      await setAccountRole(a.username, role);
       await reload();
     } catch (e) {
       setErr(e.message || 'Could not change role.');
@@ -2707,14 +2769,27 @@ function TeamPanel({ user }) {
     }
   };
 
-  const remove = async (account) => {
+  const promote = (a) =>
+    changeRole(
+      a,
+      ROLES.OWNER,
+      `Make ${nameOf(a)} an Owner? Owners have full edit and team-management access. Only the Master can later demote an Owner.`
+    );
+
+  const demote = (a) =>
+    changeRole(
+      a,
+      ROLES.MEMBER,
+      `Make ${nameOf(a)} a Member? They will lose edit and team-management access.`
+    );
+
+  const remove = async (a) => {
     setErr('');
-    if (!window.confirm(`Remove ${account.display_name || account.username}? This permanently deletes their account.`)) {
-      return;
-    }
+    if (!window.confirm(`Remove ${nameOf(a)}? They will lose access immediately.`)) return;
     setBusy(true);
     try {
-      await removeAccount(account.username);
+      await removeAccount(a.username);
+      if (resetFor === a.username) setResetFor(null);
       await reload();
     } catch (e) {
       setErr(e.message || 'Could not remove member.');
@@ -2723,22 +2798,43 @@ function TeamPanel({ user }) {
     }
   };
 
-  const ghostBtn = {
-    border: `1px solid ${C.border}`,
+  const openReset = (a) => {
+    setResetDone(null);
+    setResetErr('');
+    setResetPw('');
+    setResetFor(a.username);
+  };
+
+  const submitReset = async (a) => {
+    setResetErr('');
+    if (!isValidPassword(resetPw)) {
+      setResetErr(`Password must be ${PASSWORD_RULE}.`);
+      return;
+    }
+    setBusy(true);
+    try {
+      await changePassword(a.username, resetPw);
+      setResetDone({ username: a.username, name: nameOf(a), pw: resetPw });
+      setResetFor(null);
+      setResetPw('');
+    } catch (e) {
+      setResetErr(e.message || 'Could not reset password.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const actionBtn = (variant) => ({
+    width: 92,
+    border: `1px solid ${variant === 'danger' ? C.red : C.border}`,
     background: '#fff',
+    color: variant === 'danger' ? C.red : C.text,
     borderRadius: 7,
-    padding: '5px 10px',
+    padding: '5px 6px',
     fontSize: 12,
     fontWeight: 600,
     cursor: 'pointer',
-    color: C.text,
-  };
-  const roleBadge = (role) => ({
-    fontSize: 11,
-    fontWeight: 700,
-    letterSpacing: '0.04em',
-    textTransform: 'uppercase',
-    color: role === ROLES.OWNER ? C.primary : C.muted,
+    whiteSpace: 'nowrap',
   });
 
   return (
@@ -2749,49 +2845,149 @@ function TeamPanel({ user }) {
       {accounts == null ? (
         <p style={{ fontSize: 13, color: C.muted }}>Loading team…</p>
       ) : (
-        <div style={{ display: 'grid', gap: 2 }}>
+        <div>
           {accounts.map((a) => {
-            const isOwner = a.role === ROLES.OWNER;
+            const name = nameOf(a);
+            const showUsername = name.toLowerCase() !== a.username.toLowerCase();
             const isSelf = a.username === user.username;
+            const can = actionsFor(a);
             return (
-              <div
-                key={a.username}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 12,
-                  padding: '8px 0',
-                  borderBottom: `1px solid ${C.bg}`,
-                }}
-              >
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 14, fontWeight: 600 }}>
-                    {a.display_name || a.username}
-                    {isSelf && <span style={{ color: C.muted, fontWeight: 400 }}> · you</span>}
+              <React.Fragment key={a.username}>
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 14,
+                    padding: '9px 0',
+                    borderBottom: `1px solid ${C.bg}`,
+                  }}
+                >
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 14, fontWeight: 600 }}>
+                      {name}
+                      {isSelf && <span style={{ color: C.muted, fontWeight: 400 }}> · you</span>}
+                    </div>
+                    {showUsername && (
+                      <div style={{ fontSize: 12, color: C.muted }}>@{a.username}</div>
+                    )}
                   </div>
-                  <div style={{ fontSize: 12, color: C.muted }}>{a.username}</div>
+                  <div style={{ width: 70, display: 'flex', justifyContent: 'flex-end' }}>
+                    <RoleBadge role={a.role} />
+                  </div>
+                  <div
+                    style={{
+                      width: 296,
+                      display: 'flex',
+                      gap: 6,
+                      justifyContent: 'flex-end',
+                      alignItems: 'center',
+                    }}
+                  >
+                    {can.protected ? (
+                      <span style={{ fontSize: 12, color: C.muted, fontStyle: 'italic' }}>
+                        Protected
+                      </span>
+                    ) : (
+                      <>
+                        {can.promote && (
+                          <button style={actionBtn()} disabled={busy} onClick={() => promote(a)}>
+                            Make Owner
+                          </button>
+                        )}
+                        {can.demote && (
+                          <button style={actionBtn()} disabled={busy} onClick={() => demote(a)}>
+                            Make Member
+                          </button>
+                        )}
+                        {can.reset && (
+                          <button style={actionBtn()} disabled={busy} onClick={() => openReset(a)}>
+                            Reset
+                          </button>
+                        )}
+                        {can.remove && (
+                          <button
+                            style={actionBtn('danger')}
+                            disabled={busy}
+                            onClick={() => remove(a)}
+                          >
+                            Remove
+                          </button>
+                        )}
+                      </>
+                    )}
+                  </div>
                 </div>
-                <span style={roleBadge(a.role)}>{isOwner ? 'Owner' : 'Member'}</span>
-                <div style={{ display: 'flex', gap: 6, minWidth: 168, justifyContent: 'flex-end' }}>
-                  {isOwner ? (
-                    // Owners are protected — no demote, no remove.
-                    <span style={{ fontSize: 12, color: C.muted }}>Protected</span>
-                  ) : (
-                    <>
-                      <button style={ghostBtn} disabled={busy} onClick={() => promote(a)}>
-                        Make Owner
-                      </button>
-                      <button
-                        style={{ ...ghostBtn, color: C.red, borderColor: C.red }}
-                        disabled={busy}
-                        onClick={() => remove(a)}
-                      >
-                        Remove
-                      </button>
-                    </>
-                  )}
-                </div>
-              </div>
+
+                {resetFor === a.username && (
+                  <div
+                    style={{
+                      display: 'flex',
+                      flexWrap: 'wrap',
+                      alignItems: 'center',
+                      gap: 8,
+                      padding: '10px 0 12px',
+                      borderBottom: `1px solid ${C.bg}`,
+                    }}
+                  >
+                    <span style={{ fontSize: 12, color: C.muted }}>
+                      New password for <strong>{name}</strong>:
+                    </span>
+                    <input
+                      style={{ ...settingInput, width: 150 }}
+                      type="text"
+                      inputMode="numeric"
+                      autoFocus
+                      placeholder={PASSWORD_RULE}
+                      value={resetPw}
+                      onChange={(e) => setResetPw(e.target.value)}
+                    />
+                    <button
+                      style={{ ...settingsSmallBtn, marginTop: 0 }}
+                      disabled={busy}
+                      onClick={() => submitReset(a)}
+                    >
+                      Set password
+                    </button>
+                    <button
+                      style={{ ...actionBtn(), width: 'auto', padding: '5px 10px' }}
+                      onClick={() => {
+                        setResetFor(null);
+                        setResetErr('');
+                      }}
+                    >
+                      Cancel
+                    </button>
+                    {resetErr && <span style={{ color: C.red, fontSize: 12 }}>{resetErr}</span>}
+                  </div>
+                )}
+
+                {resetDone && resetDone.username === a.username && (
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 10,
+                      padding: '9px 12px',
+                      margin: '8px 0',
+                      background: 'rgba(109,187,138,0.14)',
+                      border: `1px solid ${C.green}`,
+                      borderRadius: 8,
+                      fontSize: 13,
+                    }}
+                  >
+                    <span style={{ flex: 1 }}>
+                      New password set for <strong>{resetDone.name}</strong>:{' '}
+                      <strong>{resetDone.pw}</strong> — share it with them to log in.
+                    </span>
+                    <button
+                      style={{ ...actionBtn(), width: 'auto', padding: '4px 10px' }}
+                      onClick={() => setResetDone(null)}
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                )}
+              </React.Fragment>
             );
           })}
         </div>
@@ -2819,17 +3015,19 @@ function TeamPanel({ user }) {
           onChange={(e) => setNewRole(e.target.value)}
         >
           <option value={ROLES.MEMBER}>Member</option>
-          <option value={ROLES.OWNER}>Owner</option>
+          {isMaster && <option value={ROLES.OWNER}>Owner</option>}
         </select>
+        <div>
+          <button style={{ ...settingsSmallBtn, marginTop: 0 }} disabled={busy} onClick={addMember}>
+            {busy ? 'Working…' : 'Add member'}
+          </button>
+        </div>
+        {addMsg && (
+          <p style={{ color: addMsg.includes('created') ? C.green : C.red, fontSize: 13, margin: '4px 0 0' }}>
+            {addMsg}
+          </p>
+        )}
       </div>
-      <div>
-        <button style={settingsSmallBtn} disabled={busy} onClick={addMember}>
-          {busy ? 'Working…' : 'Add member'}
-        </button>
-      </div>
-      {addMsg && (
-        <p style={{ color: addMsg.includes('created') ? C.green : C.red, fontSize: 13 }}>{addMsg}</p>
-      )}
     </Card>
   );
 }
