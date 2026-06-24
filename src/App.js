@@ -2614,11 +2614,10 @@ function pointInTimeOver(allYears, key, periods) {
 }
 
 const DASH_PRESETS = [
-  ['thisMonth', 'This Month'],
+  ['lastMonth', 'Last Month'],
   ['last3', 'Last 3 Months'],
   ['last6', 'Last 6 Months'],
   ['ytd', 'YTD'],
-  ['fullYear', 'Full Year'],
   ['allTime', 'All Time'],
 ];
 
@@ -2626,14 +2625,13 @@ function buildPresetRanges(allYears) {
   const now = new Date();
   const y0 = now.getFullYear();
   const m0 = now.getMonth();
-  const lc = addMonths({ y: y0, m: m0 }, -1);
+  const lc = latestCompletedPeriod(allYears); // most recent completed month (data-aware)
   const ext = dataExtent(allYears);
   return {
-    thisMonth: { from: { y: y0, m: m0 }, to: { y: y0, m: m0 } },
+    lastMonth: { from: lc, to: lc },
     last3: { from: addMonths(lc, -2), to: lc },
     last6: { from: addMonths(lc, -5), to: lc },
     ytd: { from: { y: y0, m: 0 }, to: { y: y0, m: m0 } },
-    fullYear: { from: { y: y0, m: 0 }, to: { y: y0, m: 11 } },
     allTime: ext.earliest && ext.latest ? { from: ext.earliest, to: ext.latest } : null,
   };
 }
@@ -2647,8 +2645,8 @@ function DashboardTab({ allYears }) {
   const defaultPeriod = useMemo(() => latestCompletedPeriod(allYears), [allYears]);
   const allTimeEnd = useMemo(() => dataExtent(allYears).latest, [allYears]);
 
-  // All Time is the default selection.
-  const [sel, setSel] = useState('allTime'); // preset key | 'custom'
+  // Last Month is the default selection.
+  const [sel, setSel] = useState('lastMonth'); // preset key | 'custom'
   const [customFrom, setCustomFrom] = useState(() => toMonthInput(latestCompletedPeriod(allYears)));
   const [customTo, setCustomTo] = useState(() => toMonthInput(latestCompletedPeriod(allYears)));
   const [customOpen, setCustomOpen] = useState(false);
@@ -2810,11 +2808,7 @@ function DashboardTab({ allYears }) {
 
   return (
     <div style={{ display: 'grid', gap: 14 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-        <h2 style={{ fontFamily: 'var(--font-head)', fontWeight: 600, fontSize: 22, margin: 0 }}>Overview</h2>
-        <div style={{ flex: 1 }} />
-        <DownloadButton label="Download all" />
-      </div>
+      <h2 style={{ fontFamily: 'var(--font-head)', fontWeight: 600, fontSize: 22, margin: 0 }}>Overview</h2>
 
       {/* Date-range control: preset pills + a single collapsible Custom range. */}
       <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
@@ -2885,6 +2879,8 @@ function DashboardTab({ allYears }) {
             </div>
           )}
         </div>
+        <div style={{ flex: 1, minWidth: 8 }} />
+        <DownloadButton label="Download all" />
       </div>
 
       {/* Hero row — large headline totals in one card */}
