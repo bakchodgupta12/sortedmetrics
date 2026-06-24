@@ -158,6 +158,14 @@ const TABS = [
   'Campaigns',
 ];
 
+// Short nav labels where the tab already implies context (display only — the
+// tab keys/routing stay the full names).
+const TAB_LABELS = {
+  'Installs & Users': 'Users',
+  'Top-up Cards': 'Cards',
+  'Costs & Revenue': 'Revenue',
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Auth
 // ─────────────────────────────────────────────────────────────────────────────
@@ -812,7 +820,7 @@ function TopNav({
                   whiteSpace: 'nowrap',
                 }}
               >
-                {tab}
+                {TAB_LABELS[tab] || tab}
               </button>
             );
           })}
@@ -2382,9 +2390,7 @@ const DASH_KPI_LABEL = {
 // Small ▲/▼ delta token. Up is "good" (green) for every dashboard metric here;
 // down is red. `none` renders a muted dash when there's nothing to compare to.
 function DeltaToken({ delta, size = 12 }) {
-  if (!delta || delta.dir === 'none' || !delta.text) {
-    return <span style={{ fontSize: size, color: C.gray400 }}>—</span>;
-  }
+  if (!delta || delta.dir === 'none' || !delta.text) return null;
   return (
     <span
       style={{
@@ -2588,9 +2594,10 @@ function lifetimeThrough(allYears, keys, end) {
   return any ? s : null;
 }
 
-// Point-in-time aggregation (MAU/DAU) over a multi-month range is provisional.
-// Change this one function to refine the rule later (e.g. 'last' or 'max').
-const POINT_IN_TIME_AGG = 'avg';
+// Point-in-time aggregation (MAU/DAU) over a multi-month range: use the latest
+// value in the range (a snapshot can't be summed/averaged meaningfully — over
+// All Time this resolves to the most recent reported figure). Change here later.
+const POINT_IN_TIME_AGG = 'last';
 function aggregatePointInTime(values) {
   if (!values.length) return null;
   if (POINT_IN_TIME_AGG === 'last') return values[values.length - 1];
@@ -2607,7 +2614,6 @@ function pointInTimeOver(allYears, key, periods) {
 }
 
 const DASH_PRESETS = [
-  ['default', 'Default'],
   ['thisMonth', 'This Month'],
   ['last3', 'Last 3 Months'],
   ['last6', 'Last 6 Months'],
@@ -2635,18 +2641,26 @@ function buildPresetRanges(allYears) {
 function DashboardTab({ allYears }) {
   const storeKeys = STORE_KEYS.map((s) => s[0]);
   const countKeys = ['tx_sendP2P', 'tx_receiveP2P', 'tx_cashOut', 'tx_cardRedemption', 'tx_other'];
-  const valueKeys = ['tx_sendVolume', 'tx_receiveVolume', 'tx_cashOutVolume', 'tx_cardRedemptionVolume', 'tx_otherVolume'];
   const revKeys = ['c_grossRevenue', 'r_offramps', 'r_other'];
 
   const presets = useMemo(() => buildPresetRanges(allYears), [allYears]);
   const defaultPeriod = useMemo(() => latestCompletedPeriod(allYears), [allYears]);
   const allTimeEnd = useMemo(() => dataExtent(allYears).latest, [allYears]);
 
-  const [sel, setSel] = useState('default'); // preset key | 'custom' | 'default'
+  // All Time is the default selection.
+  const [sel, setSel] = useState('allTime'); // preset key | 'custom'
   const [customFrom, setCustomFrom] = useState(() => toMonthInput(latestCompletedPeriod(allYears)));
   const [customTo, setCustomTo] = useState(() => toMonthInput(latestCompletedPeriod(allYears)));
+  const [customOpen, setCustomOpen] = useState(false);
 
-  // Resolve the active range. null === default behaviour.
+  useEffect(() => {
+    if (!customOpen) return;
+    const close = () => setCustomOpen(false);
+    document.addEventListener('click', close);
+    return () => document.removeEventListener('click', close);
+  }, [customOpen]);
+
+  // Resolve the active range. null only when there's no data to span.
   let range = null;
   if (sel === 'custom') {
     const f = parseMonthInput(customFrom);
@@ -2654,21 +2668,22 @@ function DashboardTab({ allYears }) {
     if (f && t) {
       range = PERIOD(f.y, f.m) <= PERIOD(t.y, t.m) ? { from: f, to: t } : { from: t, to: f };
     }
-  } else if (sel !== 'default') {
+  } else {
     range = presets[sel] || null;
   }
 
   const selectPreset = (key) => {
     setSel(key);
-    const r = key === 'default' ? { from: defaultPeriod, to: defaultPeriod } : presets[key];
+    const r = presets[key];
     if (r) {
       setCustomFrom(toMonthInput(r.from));
       setCustomTo(toMonthInput(r.to));
     }
   };
 
+  // Periods in the active window; fall back to the latest completed month only
+  // when there's no resolvable range (e.g. an empty dataset).
   const periods = range ? periodsBetween(range.from, range.to) : [defaultPeriod];
-  const multiMonth = periods.length > 1;
 
   // Current window vs the immediately-preceding comparable window (for deltas).
   const periodCount = periods.length;
@@ -2716,27 +2731,25 @@ function DashboardTab({ allYears }) {
   const comparePhrase = range ? 'previous period' : 'last month';
   const buildMetric = (def, withCompare) => {
     const [cur, prev] = curPrev(def);
-    const pointSuffix = def.type === 'point' && multiMonth ? ` (${POINT_IN_TIME_AGG})` : '';
     const compare = withCompare && prev != null ? `vs ${fmtByUnit(prev, def.unit)} ${comparePhrase}` : null;
-    return { label: def.label + pointSuffix, value: fmtByUnit(cur, def.unit), delta: deltaOf(def, cur, prev), compare };
+    return { label: def.label, value: fmtByUnit(cur, def.unit), delta: deltaOf(def, cur, prev), compare };
   };
 
-  // Hero = our cumulative headline totals; the rest form the supporting strip.
-  const kpiDefs = [
+  // Hero = our cumulative headline totals. The supporting strip is one row of
+  // four metrics that don't simply duplicate the hero under the All Time default.
+  const heroDefs = [
     { label: 'Total Installs', type: 'lifetime', keys: storeKeys, unit: 'count' },
     { label: 'Total Users', type: 'lifetime', keys: ['u_newUsers'], unit: 'count' },
     { label: 'Total Top-up Cards Sold', type: 'lifetime', keys: ['c_sold'], unit: 'count' },
-    { label: 'New Installs', type: 'additive', keys: storeKeys, unit: 'count' },
-    { label: 'New Users', type: 'additive', keys: ['u_newUsers'], unit: 'count' },
+  ];
+  const secondaryDefs = [
     { label: 'Transactions', type: 'additive', keys: countKeys, unit: 'count' },
     { label: 'Revenue', type: 'additive', keys: revKeys, unit: 'usd' },
     { label: 'Install → User Conversion', type: 'ratio', num: ['u_newUsers'], den: storeKeys, unit: 'percent2' },
-    { label: 'Avg Transaction Value', type: 'ratio', num: valueKeys, den: countKeys, unit: 'usdt' },
     { label: 'MAU', type: 'point', key: 'u_mau', unit: 'count' },
-    { label: 'DAU', type: 'point', key: 'u_dau', unit: 'count' },
   ];
-  const heroMetrics = kpiDefs.slice(0, 3).map((d) => buildMetric(d, true));
-  const secondaryMetrics = kpiDefs.slice(3).map((d) => buildMetric(d, false));
+  const heroMetrics = heroDefs.map((d) => buildMetric(d, true));
+  const secondaryMetrics = secondaryDefs.map((d) => buildMetric(d, false));
 
   // Combined trend chart: a 12-month calendar year, solid through the latest
   // reported month then a softly-shaded "upcoming" band with dashed lines.
@@ -2773,12 +2786,6 @@ function DashboardTab({ allYears }) {
     );
   };
 
-  // Editorial subtitle: current window vs. the comparison window.
-  const fmtWindow = (a, b) =>
-    PERIOD(a.y, a.m) === PERIOD(b.y, b.m) ? fmtPeriod(a) : `${fmtPeriod(a)} – ${fmtPeriod(b)}`;
-  const currentLabel = range ? fmtWindow(range.from, range.to) : fmtPeriod(defaultPeriod);
-  const caption = `${currentLabel} · vs ${fmtWindow(compFrom, compTo)}`;
-
   const pillStyle = (active) => ({
     border: `1px solid ${active ? C.primary : C.border}`,
     background: active ? C.primary : '#fff',
@@ -2803,17 +2810,13 @@ function DashboardTab({ allYears }) {
 
   return (
     <div style={{ display: 'grid', gap: 14 }}>
-      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 12, flexWrap: 'wrap' }}>
-        <div>
-          <h2 style={{ fontFamily: 'var(--font-head)', fontWeight: 600, fontSize: 22, margin: 0 }}>Dashboard</h2>
-          <div style={{ fontSize: 12.5, color: C.muted, marginTop: 3 }}>{caption}</div>
-        </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+        <h2 style={{ fontFamily: 'var(--font-head)', fontWeight: 600, fontSize: 22, margin: 0 }}>Overview</h2>
         <div style={{ flex: 1 }} />
         <DownloadButton label="Download all" />
       </div>
 
-      {/* Date-range control — a clean toolbar: presets on the left, custom
-          From/To on the right. */}
+      {/* Date-range control: preset pills + a single collapsible Custom range. */}
       <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
         {DASH_PRESETS.map(([key, label]) => {
           if (key === 'allTime' && !presets.allTime) return null;
@@ -2823,27 +2826,65 @@ function DashboardTab({ allYears }) {
             </button>
           );
         })}
-        <div style={{ flex: 1, minWidth: 8 }} />
-        <span style={{ fontSize: 12, color: C.muted }}>From</span>
-        <input
-          type="month"
-          style={monthInput}
-          value={customFrom}
-          onChange={(e) => {
-            setCustomFrom(e.target.value);
-            setSel('custom');
-          }}
-        />
-        <span style={{ fontSize: 12, color: C.muted }}>To</span>
-        <input
-          type="month"
-          style={monthInput}
-          value={customTo}
-          onChange={(e) => {
-            setCustomTo(e.target.value);
-            setSel('custom');
-          }}
-        />
+        <div style={{ position: 'relative' }}>
+          <button
+            style={pillStyle(sel === 'custom')}
+            onClick={(e) => {
+              e.stopPropagation();
+              setCustomOpen((o) => !o);
+            }}
+          >
+            {sel === 'custom' && range
+              ? `${fmtPeriod(range.from)} – ${fmtPeriod(range.to)} ▾`
+              : 'Custom range ▾'}
+          </button>
+          {customOpen && (
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                position: 'absolute',
+                top: 40,
+                left: 0,
+                zIndex: 30,
+                background: '#fff',
+                border: `1px solid ${C.border}`,
+                borderRadius: 12,
+                boxShadow: '0 8px 24px rgba(0,0,0,0.12)',
+                padding: 14,
+                display: 'grid',
+                gap: 10,
+                minWidth: 200,
+              }}
+            >
+              {['From', 'To'].map((lbl) => (
+                <label
+                  key={lbl}
+                  style={{
+                    display: 'grid',
+                    gap: 4,
+                    fontSize: 11,
+                    fontWeight: 600,
+                    letterSpacing: '0.04em',
+                    textTransform: 'uppercase',
+                    color: C.muted,
+                  }}
+                >
+                  {lbl}
+                  <input
+                    type="month"
+                    style={monthInput}
+                    value={lbl === 'From' ? customFrom : customTo}
+                    onChange={(e) => {
+                      if (lbl === 'From') setCustomFrom(e.target.value);
+                      else setCustomTo(e.target.value);
+                      setSel('custom');
+                    }}
+                  />
+                </label>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Hero row — large headline totals in one card */}
