@@ -25,6 +25,7 @@ import {
   deleteAccount,
   emptyYear,
   getUser,
+  getLastUpdated,
   isConfigured,
   listYears,
   normaliseData,
@@ -595,8 +596,25 @@ function Dashboard({ user, setUser, onLogout }) {
 
   // Save status: 'idle' | 'saving' | 'saved' | 'error'
   const [saveStatus, setSaveStatus] = useState('idle');
+  // Team-wide "last updated" timestamp (most recent updated_at across all
+  // rows). Seeded from this user's row, then refined from the table maximum.
+  const [lastUpdated, setLastUpdated] = useState(user.updated_at || null);
   const saveTimer = useRef(null);
   const skipNextSave = useRef(true); // don't save on initial mount
+
+  // Best-effort refresh of the freshness indicator; never blocks the UI.
+  const loadLastUpdated = useCallback(async () => {
+    try {
+      const ts = await getLastUpdated();
+      if (ts) setLastUpdated(ts);
+    } catch {
+      /* non-critical — leave the existing value in place */
+    }
+  }, []);
+
+  useEffect(() => {
+    loadLastUpdated();
+  }, [loadLastUpdated]);
 
   const persist = useCallback(
     async (next) => {
@@ -604,11 +622,12 @@ function Dashboard({ user, setUser, onLogout }) {
       try {
         await saveData(user.username, next);
         setSaveStatus('saved');
+        loadLastUpdated();
       } catch (err) {
         setSaveStatus('error');
       }
     },
-    [user.username]
+    [user.username, loadLastUpdated]
   );
 
   // Debounced auto-save whenever data changes.
@@ -632,11 +651,12 @@ function Dashboard({ user, setUser, onLogout }) {
         setData(norm);
         setUser(row);
         setSaveStatus('saved');
+        loadLastUpdated();
       }
     } catch {
       setSaveStatus('error');
     }
-  }, [user.username, setUser]);
+  }, [user.username, setUser, loadLastUpdated]);
 
   // Edit a single metric cell for the active year.
   const updateMetric = useCallback(
@@ -703,18 +723,21 @@ function Dashboard({ user, setUser, onLogout }) {
   return (
     <div style={{ minHeight: '100vh' }}>
       <TopNav
-        user={user}
-        years={years}
-        activeYear={activeYear}
-        onYearChange={setActiveYear}
-        onAddYear={addYear}
         saveStatus={saveStatus}
+        lastUpdated={lastUpdated}
         onRefresh={refresh}
         onLogout={onLogout}
         onOpenSettings={() => setActiveTab('Settings')}
         settingsActive={activeTab === 'Settings'}
       />
-      <TabBar activeTab={activeTab} onChange={setActiveTab} />
+      <TabBar
+        activeTab={activeTab}
+        onChange={setActiveTab}
+        years={years}
+        activeYear={activeYear}
+        onYearChange={setActiveYear}
+        onAddYear={addYear}
+      />
 
       <main
         style={{
@@ -754,28 +777,18 @@ function saveStatusLabel(status) {
   }
 }
 
-function TopNav({
-  user,
-  years,
-  activeYear,
-  onYearChange,
-  onAddYear,
-  saveStatus,
-  onRefresh,
-  onLogout,
-  onOpenSettings,
-  settingsActive,
-}) {
-  const addNewYear = () => {
-    const input = window.prompt('Add year (e.g. 2027):');
-    if (!input) return;
-    const year = parseInt(input, 10);
-    if (Number.isNaN(year) || year < 2000 || year > 2100) {
-      window.alert('Please enter a valid year.');
-      return;
-    }
-    onAddYear(year);
-  };
+// "2026-06-24T..." → "24 Jun 2026". Null if absent/unparseable.
+function fmtDate(iso) {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  return `${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear()}`;
+}
+
+function TopNav({ saveStatus, lastUpdated, onRefresh, onLogout, onOpenSettings, settingsActive }) {
+  const statusLabel = saveStatusLabel(saveStatus);
+  const lastUpdatedLabel = fmtDate(lastUpdated);
 
   return (
     <header
@@ -793,17 +806,159 @@ function TopNav({
           maxWidth: 1120,
           margin: '0 auto',
           padding: '12px 20px',
-          display: 'flex',
+          display: 'grid',
+          gridTemplateColumns: '1fr auto 1fr',
           alignItems: 'center',
           gap: 16,
         }}
       >
-        <img
-          src={`${process.env.PUBLIC_URL}/sorted-wordmark.svg`}
-          alt="Sorted"
-          style={{ height: 22, width: 'auto' }}
-        />
-        <div style={{ flex: 1 }} />
+        {/* Left — Sorted wordmark. Pulled left by the SVG's internal left
+            whitespace so its glyphs hang on the shared 20px content gridline. */}
+        <div style={{ display: 'flex', alignItems: 'center' }}>
+          <img
+            src={`${process.env.PUBLIC_URL}/sorted-wordmark.svg`}
+            alt="Sorted"
+            style={{ height: 22, width: 'auto', display: 'block', marginLeft: -6.5 }}
+          />
+        </div>
+
+        {/* Center — dashboard title (brand sits in the wordmark on the left). */}
+        <div style={{ textAlign: 'center' }}>
+          <span
+            style={{
+              fontFamily: 'var(--font-head)',
+              fontSize: 16,
+              fontWeight: 600,
+              color: C.text,
+              whiteSpace: 'nowrap',
+            }}
+          >
+            Metrics Dashboard
+          </span>
+        </div>
+
+        {/* Right — save status, team-wide freshness, refresh, settings, logout. */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 10 }}>
+          {statusLabel && (
+            <span style={{ fontSize: 12, color: saveStatus === 'error' ? C.red : C.muted }}>
+              {statusLabel}
+            </span>
+          )}
+          {lastUpdatedLabel && (
+            <span style={{ fontSize: 12, color: C.muted, whiteSpace: 'nowrap' }}>
+              Last updated: {lastUpdatedLabel}
+            </span>
+          )}
+          <button
+            onClick={onRefresh}
+            title="Refresh from server"
+            style={{
+              border: `1px solid ${C.border}`,
+              background: '#fff',
+              borderRadius: 7,
+              width: 28,
+              height: 28,
+              lineHeight: 1,
+            }}
+          >
+            ↻
+          </button>
+          <button
+            onClick={onOpenSettings}
+            title="Settings"
+            aria-label="Settings"
+            style={{
+              border: `1px solid ${settingsActive ? C.primary : C.border}`,
+              background: settingsActive ? 'rgba(0,17,168,0.10)' : '#fff',
+              color: settingsActive ? C.primary : C.text,
+              borderRadius: 8,
+              width: 32,
+              height: 32,
+              fontSize: 16,
+              lineHeight: 1,
+            }}
+          >
+            ⚙
+          </button>
+          <button
+            onClick={onLogout}
+            style={{
+              border: `1px solid ${C.border}`,
+              background: '#fff',
+              borderRadius: 8,
+              padding: '6px 12px',
+              fontSize: 13,
+            }}
+          >
+            Logout
+          </button>
+        </div>
+      </div>
+    </header>
+  );
+}
+
+function TabBar({ activeTab, onChange, years, activeYear, onYearChange, onAddYear }) {
+  const addNewYear = () => {
+    const input = window.prompt('Add year (e.g. 2027):');
+    if (!input) return;
+    const year = parseInt(input, 10);
+    if (Number.isNaN(year) || year < 2000 || year > 2100) {
+      window.alert('Please enter a valid year.');
+      return;
+    }
+    onAddYear(year);
+  };
+
+  return (
+    <nav
+      style={{
+        position: 'sticky',
+        top: 53,
+        zIndex: 19,
+        background: 'rgba(247,245,240,0.92)',
+        backdropFilter: 'blur(8px)',
+        borderBottom: `1px solid ${C.border}`,
+      }}
+    >
+      <div
+        style={{
+          maxWidth: 1120,
+          margin: '0 auto',
+          padding: '0 20px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 12,
+        }}
+      >
+        <div style={{ display: 'flex', gap: 4, overflowX: 'auto', flex: 1 }}>
+          {TABS.map((tab, i) => {
+            const active = tab === activeTab;
+            return (
+              <button
+                key={tab}
+                onClick={() => onChange(tab)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  // First tab hangs flush on the shared left gridline (no left
+                  // inset) so it lines up with the wordmark and page content.
+                  padding: i === 0 ? '12px 12px 12px 0' : '12px 12px',
+                  fontSize: 14,
+                  fontWeight: active ? 700 : 500,
+                  color: active ? C.primary : C.muted,
+                  borderBottom: active
+                    ? `2px solid ${C.primary}`
+                    : '2px solid transparent',
+                  marginBottom: -1,
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {tab}
+              </button>
+            );
+          })}
+        </div>
 
         <select
           value={activeYear}
@@ -812,6 +967,7 @@ function TopNav({
             else onYearChange(Number(e.target.value));
           }}
           style={{
+            flexShrink: 0,
             width: 'auto',
             appearance: 'none',
             WebkitAppearance: 'none',
@@ -833,123 +989,6 @@ function TopNav({
           ))}
           <option value="__add__">+ Add year…</option>
         </select>
-
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-            minWidth: 120,
-            justifyContent: 'flex-end',
-          }}
-        >
-          <span
-            style={{
-              fontSize: 12,
-              color: saveStatus === 'error' ? C.red : C.muted,
-            }}
-          >
-            {saveStatusLabel(saveStatus)}
-          </span>
-          <button
-            onClick={onRefresh}
-            title="Refresh from server"
-            style={{
-              border: `1px solid ${C.border}`,
-              background: '#fff',
-              borderRadius: 7,
-              width: 28,
-              height: 28,
-              lineHeight: 1,
-            }}
-          >
-            ↻
-          </button>
-        </div>
-
-        <span style={{ fontSize: 13, color: C.text }}>
-          {user.display_name || user.username}
-        </span>
-        <button
-          onClick={onOpenSettings}
-          title="Settings"
-          aria-label="Settings"
-          style={{
-            border: `1px solid ${settingsActive ? C.primary : C.border}`,
-            background: settingsActive ? 'rgba(0,17,168,0.10)' : '#fff',
-            color: settingsActive ? C.primary : C.text,
-            borderRadius: 8,
-            width: 32,
-            height: 32,
-            fontSize: 16,
-            lineHeight: 1,
-          }}
-        >
-          ⚙
-        </button>
-        <button
-          onClick={onLogout}
-          style={{
-            border: `1px solid ${C.border}`,
-            background: '#fff',
-            borderRadius: 8,
-            padding: '6px 12px',
-            fontSize: 13,
-          }}
-        >
-          Logout
-        </button>
-      </div>
-    </header>
-  );
-}
-
-function TabBar({ activeTab, onChange }) {
-  return (
-    <nav
-      style={{
-        position: 'sticky',
-        top: 53,
-        zIndex: 19,
-        background: 'rgba(247,245,240,0.92)',
-        backdropFilter: 'blur(8px)',
-        borderBottom: `1px solid ${C.border}`,
-      }}
-    >
-      <div
-        style={{
-          maxWidth: 1120,
-          margin: '0 auto',
-          padding: '0 20px',
-          display: 'flex',
-          gap: 4,
-          overflowX: 'auto',
-        }}
-      >
-        {TABS.map((tab) => {
-          const active = tab === activeTab;
-          return (
-            <button
-              key={tab}
-              onClick={() => onChange(tab)}
-              style={{
-                background: 'none',
-                border: 'none',
-                padding: '12px 12px',
-                fontSize: 14,
-                fontWeight: active ? 700 : 500,
-                color: active ? C.primary : C.muted,
-                borderBottom: active
-                  ? `2px solid ${C.primary}`
-                  : '2px solid transparent',
-                marginBottom: -1,
-                whiteSpace: 'nowrap',
-              }}
-            >
-              {tab}
-            </button>
-          );
-        })}
       </div>
     </nav>
   );

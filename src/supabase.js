@@ -334,6 +334,20 @@ export async function getUser(username) {
   return data || null;
 }
 
+// Most recent updated_at across the whole table — team-wide data freshness,
+// independent of the current session's own save. Null if the table is empty.
+export async function getLastUpdated() {
+  requireClient();
+  const { data, error } = await supabase
+    .from(TABLE)
+    .select('updated_at')
+    .order('updated_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return data?.updated_at || null;
+}
+
 // First-login registration: creates the row with hashed credentials.
 export async function createUser({
   username,
