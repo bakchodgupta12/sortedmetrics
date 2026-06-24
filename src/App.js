@@ -965,22 +965,33 @@ function getVal(yearData, key, i) {
   return isNum(v) ? v : null;
 }
 
+// Prepend a "$" to a formatted money string, keeping any leading minus sign
+// outside the symbol (e.g. -1,234.00 → -$1,234.00).
+function withDollar(formatted) {
+  if (formatted === DASH) return DASH;
+  return formatted.startsWith('-') ? `-$${formatted.slice(1)}` : `$${formatted}`;
+}
+
 function fmtByUnit(v, unit) {
   switch (unit) {
     case 'usdt':
-      return fmtUSDT(v);
+      return withDollar(fmtUSDT(v));
+    case 'usd':
+      return withDollar(fmtNumber(v));
     case 'percent':
       return fmtPercent(v);
     case 'ratio':
       if (!isNum(v)) return DASH;
-      return Math.abs(v) >= 1_000_000
-        ? compact(v)
-        : v.toLocaleString('en-US', {
-            minimumFractionDigits: 2,
-            maximumFractionDigits: 2,
-          });
+      return withDollar(
+        Math.abs(v) >= 1_000_000
+          ? compact(v)
+          : v.toLocaleString('en-US', {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
+            })
+      );
     default:
-      return fmtNumber(v); // count, usd
+      return fmtNumber(v); // count
   }
 }
 
@@ -1099,7 +1110,16 @@ function valueAt(s, i) {
 function Cell({ value, unit, onCommit, inputStyle }) {
   const [focused, setFocused] = useState(false);
   const [draft, setDraft] = useState('');
-  const shown = focused ? draft : value == null ? '' : fmtByUnit(value, unit);
+  // Money fields (USD / USDT / money ratios) carry a "$" prefix at rest and
+  // while editing; counts and percentages do not.
+  const isMoney = unit === 'usd' || unit === 'usdt' || unit === 'ratio';
+  const shown = focused
+    ? isMoney && draft !== ''
+      ? `$${draft}`
+      : draft
+    : value == null
+    ? ''
+    : fmtByUnit(value, unit);
 
   const commit = () => {
     const t = draft.trim().replace(/,/g, '');
@@ -1116,13 +1136,24 @@ function Cell({ value, unit, onCommit, inputStyle }) {
       value={shown}
       placeholder={DASH}
       inputMode="decimal"
-      onFocus={() => {
+      onFocus={(e) => {
         setFocused(true);
         setDraft(value == null ? '' : String(value));
+        // Drop the caret at the end of the existing value so edits start from
+        // the right. Deferred so it runs after the draft re-render.
+        const el = e.currentTarget;
+        requestAnimationFrame(() => {
+          const end = el.value.length;
+          try {
+            el.setSelectionRange(end, end);
+          } catch {
+            // setSelectionRange is unsupported on some input types — ignore.
+          }
+        });
       }}
       onChange={(e) =>
         // Allow only digits, thousands separators and a single decimal point.
-        // Strips letters, symbols and minus signs as they're typed/pasted.
+        // Strips letters, symbols (incl. the "$"), and minus signs as typed.
         setDraft(e.target.value.replace(/[^0-9.,]/g, ''))
       }
       onBlur={() => {
@@ -1238,6 +1269,12 @@ function DividerRow() {
       </td>
     </tr>
   );
+}
+
+// Standalone section break (whitespace + a thin rule) for separating blocks
+// that live outside a single MetricTable, e.g. the Top-up Cards sub-sections.
+function SectionDivider() {
+  return <div aria-hidden="true" style={{ height: 1, background: C.border, margin: '16px 0 0' }} />;
 }
 
 function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD' }) {
@@ -1927,10 +1964,11 @@ function CardsTab({ yearData, updateMetric, allYears, activeYear }) {
       <Card accent={C.primary}>
         <TabTitle title="Top-up Cards" accent={C.purple} />
         <MetricTable yearData={yearData} rows={rows} updateMetric={updateMetric} />
+        <SectionDivider />
         <LifetimeSummary
           calculated={[
             { label: 'Total Cards Sold', value: lifeSoldTotal == null ? DASH : fmtNumber(lifeSoldTotal) },
-            { label: 'Total Cards Volume', value: lifeVolTotal == null ? DASH : fmtUSDT(lifeVolTotal) },
+            { label: 'Total Cards Volume', value: fmtByUnit(lifeVolTotal, 'usdt') },
           ]}
           manual={{
             label: 'Total Unique Users',
@@ -1939,6 +1977,7 @@ function CardsTab({ yearData, updateMetric, allYears, activeYear }) {
             info: 'A deduplicated all-time count of unique card users. Entered manually — it cannot be summed from the monthly Unique Users figures.',
           }}
         />
+        <SectionDivider />
         <MarketSummaryTable yearData={yearData} updateMetric={updateMetric} />
       </Card>
       <TwoCol>
@@ -2390,7 +2429,7 @@ function DashboardTab({ yearData, activeYear }) {
     },
     {
       label: 'Avg Transaction Value USDT (latest)',
-      value: fmtUSDT(safeDiv(valueAt(totalVol, latest), valueAt(totalTx, latest))),
+      value: fmtByUnit(safeDiv(valueAt(totalVol, latest), valueAt(totalTx, latest)), 'usdt'),
       accent: C.amber,
     },
   ];
