@@ -131,6 +131,24 @@ const C = {
   purple: '#9b8ec4',
 };
 
+// Success/positive token (distinct from the alarm-red `C.red`, which is reserved
+// for negatives and warnings only).
+const SUCCESS = '#1f8a4d';
+
+// Pleasant pastel categorical palette for multi-series charts. Chosen for
+// legibility and a harmonious look rather than brand fidelity; alarm-red is
+// never used for a data category (it stays reserved for negatives/warnings).
+const PASTEL = {
+  blue: '#8fa6e8', // periwinkle
+  mint: '#84cdb0', // green
+  sand: '#f0c674', // gold
+  lavender: '#b79ce0',
+  coral: '#efa08a', // warm — stands in for the old alarm-red category
+  sky: '#7fc8dd',
+  rose: '#e892b5',
+  gray: '#c4c7d0', // neutral "other"
+};
+
 function Card({ accent, style, children }) {
   return (
     <div
@@ -685,7 +703,7 @@ function fmtDate(iso) {
 
 // Round avatar button (user's initial) opening a menu: account info, refresh,
 // settings, and log out.
-function ProfileMenu({ user, lastUpdated, onRefresh, onOpenSettings, onLogout }) {
+function ProfileMenu({ user, lastUpdated, saveStatus, onRefresh, onOpenSettings, onLogout }) {
   const [open, setOpen] = useState(false);
   useEffect(() => {
     if (!open) return;
@@ -698,12 +716,23 @@ function ProfileMenu({ user, lastUpdated, onRefresh, onOpenSettings, onLogout })
   const initial = (name[0] || '?').toUpperCase();
   const lu = fmtDate(lastUpdated);
 
+  // Save status folded onto the avatar: a small status dot + the menu line.
+  const statusLabel = saveStatusLabel(saveStatus);
+  const dotColor =
+    saveStatus === 'saving'
+      ? C.amber
+      : saveStatus === 'saved'
+      ? SUCCESS
+      : saveStatus === 'error'
+      ? C.red
+      : null;
+
   return (
     <div style={{ position: 'relative', flexShrink: 0 }}>
       <button
         type="button"
-        title="Account"
-        aria-label="Account"
+        title={statusLabel ? `Account · ${statusLabel}` : 'Account'}
+        aria-label={statusLabel ? `Account, ${statusLabel}` : 'Account'}
         onClick={(e) => {
           e.stopPropagation();
           setOpen((o) => !o);
@@ -726,6 +755,23 @@ function ProfileMenu({ user, lastUpdated, onRefresh, onOpenSettings, onLogout })
       >
         {initial}
       </button>
+      {dotColor && (
+        <span
+          aria-hidden="true"
+          title={statusLabel}
+          style={{
+            position: 'absolute',
+            right: -1,
+            bottom: -1,
+            width: 11,
+            height: 11,
+            borderRadius: '50%',
+            background: dotColor,
+            border: `2px solid ${C.bg}`,
+            pointerEvents: 'none',
+          }}
+        />
+      )}
       {open && (
         <div
           onClick={(e) => e.stopPropagation()}
@@ -745,6 +791,29 @@ function ProfileMenu({ user, lastUpdated, onRefresh, onOpenSettings, onLogout })
           <div style={{ padding: '8px 12px 10px' }}>
             <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{name}</div>
             <div style={{ fontSize: 12, color: C.muted, marginTop: 1 }}>{roleLabel(user.role)}</div>
+            {statusLabel && (
+              <div
+                style={{
+                  fontSize: 11.5,
+                  color: saveStatus === 'error' ? C.red : C.muted,
+                  marginTop: 6,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                }}
+              >
+                <span
+                  style={{
+                    width: 7,
+                    height: 7,
+                    borderRadius: '50%',
+                    background: dotColor || C.muted,
+                    flexShrink: 0,
+                  }}
+                />
+                {statusLabel}
+              </div>
+            )}
             {lu && <div style={{ fontSize: 11.5, color: C.muted, marginTop: 6 }}>Last updated: {lu}</div>}
           </div>
           <div style={{ height: 1, background: C.border, margin: '2px 0 4px' }} />
@@ -774,8 +843,6 @@ function TopNav({
   onOpenSettings,
   onLogout,
 }) {
-  const statusLabel = saveStatusLabel(saveStatus);
-
   const addNewYear = () => {
     const input = window.prompt('Add year (e.g. 2027):');
     if (!input) return;
@@ -805,19 +872,21 @@ function TopNav({
           padding: '10px 20px',
           display: 'flex',
           alignItems: 'center',
-          justifyContent: 'space-between',
           gap: 16,
         }}
       >
-        {/* Left — Sorted wordmark, pulled left so its glyphs hang on the gridline. */}
-        <img
-          src={`${process.env.PUBLIC_URL}/sorted-wordmark.svg`}
-          alt="Sorted"
-          style={{ height: 22, width: 'auto', display: 'block', marginLeft: -6.5, flexShrink: 0 }}
-        />
+        {/* Left — Sorted wordmark, pulled left so its glyphs hang on the
+            gridline. Equal-weight flex side so the centred nav is page-centred. */}
+        <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center' }}>
+          <img
+            src={`${process.env.PUBLIC_URL}/sorted-wordmark.svg`}
+            alt="Sorted"
+            style={{ height: 22, width: 'auto', display: 'block', marginLeft: -6.5, flexShrink: 0 }}
+          />
+        </div>
 
-        {/* Centre — tab navigation. */}
-        <nav style={{ display: 'flex', gap: 6, overflowX: 'auto', flex: 1, justifyContent: 'center' }}>
+        {/* Centre — tab navigation, centred in the bar. */}
+        <nav style={{ display: 'flex', gap: 6, overflowX: 'auto', flex: '0 1 auto', justifyContent: 'center' }}>
           {TABS.map((tab) => {
             const active = tab === activeTab;
             return (
@@ -842,13 +911,8 @@ function TopNav({
           })}
         </nav>
 
-        {/* Right — save status, year selector, profile menu. */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 10, flexShrink: 0 }}>
-          {statusLabel && (
-            <span style={{ fontSize: 12, color: saveStatus === 'error' ? C.red : C.muted, whiteSpace: 'nowrap' }}>
-              {statusLabel}
-            </span>
-          )}
+        {/* Right — year selector + profile menu (save status lives on the avatar). */}
+        <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 10 }}>
           <select
             value={activeYear}
             onChange={(e) => {
@@ -881,6 +945,7 @@ function TopNav({
           <ProfileMenu
             user={user}
             lastUpdated={lastUpdated}
+            saveStatus={saveStatus}
             onRefresh={onRefresh}
             onOpenSettings={onOpenSettings}
             onLogout={onLogout}
@@ -1045,7 +1110,7 @@ function valueAt(s, i) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Editable cell + info tooltip
 // ─────────────────────────────────────────────────────────────────────────────
-function Cell({ value, unit, onCommit, inputStyle }) {
+function Cell({ value, unit, onCommit, inputStyle, placeholder = DASH }) {
   const editable = useContext(EditableContext);
   const [focused, setFocused] = useState(false);
   const [draft, setDraft] = useState('');
@@ -1064,7 +1129,7 @@ function Cell({ value, unit, onCommit, inputStyle }) {
           ...inputStyle,
         }}
       >
-        {value == null ? DASH : fmtByUnit(value, unit)}
+        {value == null ? placeholder : fmtByUnit(value, unit)}
       </span>
     );
   }
@@ -1092,7 +1157,7 @@ function Cell({ value, unit, onCommit, inputStyle }) {
   return (
     <input
       value={shown}
-      placeholder={DASH}
+      placeholder={placeholder}
       inputMode="decimal"
       onFocus={(e) => {
         setFocused(true);
@@ -1324,18 +1389,21 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD' }) {
           borderCollapse: 'collapse',
           width: '100%',
           tableLayout: 'fixed',
-          minWidth: 1074,
+          minWidth: 1080,
         }}
       >
         {/* Explicit column widths so inputs shrink to the column (fixed layout)
-            and the header's "Upcoming" colspan lines up with the month cells. */}
+            and the header's "Upcoming" colspan lines up with the month cells.
+            The Trend column is wide with extra right padding so the sparklines
+            have breathing room from January; the summary column is kept snug so
+            it doesn't leave a gap after December. */}
         <colgroup>
           <col style={{ width: 170 }} />
-          <col style={{ width: 64 }} />
+          <col style={{ width: 90 }} />
           {MONTHS.map((m) => (
             <col key={m} style={{ width: 62 }} />
           ))}
-          <col style={{ width: 96 }} />
+          <col style={{ width: 76 }} />
         </colgroup>
         <thead>
           <tr style={{ borderBottom: `1px solid ${C.border}` }}>
@@ -1352,7 +1420,7 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD' }) {
             >
               Metric
             </th>
-            <th style={{ ...thBase, textAlign: 'center', padding: '12px 8px' }}>Trend</th>
+            <th style={{ ...thBase, textAlign: 'center', padding: '12px 20px 12px 6px' }}>Trend</th>
             {MONTHS.map((m, i) =>
               hasBand && i > latest ? null : (
                 <th
@@ -1443,7 +1511,7 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD' }) {
                       {row.label}
                       {row.info && <InfoTip text={row.info} />}
                     </td>
-                    <td style={{ padding: '4px 8px', textAlign: 'center' }}>
+                    <td style={{ padding: '4px 20px 4px 6px', textAlign: 'center' }}>
                       <Sparkline values={sparkValues(series)} color={SPARK_DETAIL} />
                     </td>
                     {MONTHS.map((m, i) => {
@@ -1486,6 +1554,7 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD' }) {
                             unit={row.unit}
                             onCommit={(v) => updateMetric(row.key, m, v)}
                             inputStyle={inStyle}
+                            placeholder={future ? '' : DASH}
                           />
                         </td>
                       );
@@ -1535,7 +1604,7 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD' }) {
                       {row.label}
                       {row.info && <InfoTip text={row.info} />}
                     </td>
-                    <td style={{ padding: '4px 8px', textAlign: 'center' }}>
+                    <td style={{ padding: '4px 20px 4px 6px', textAlign: 'center' }}>
                       <Sparkline values={sparkValues(row.values)} color={SPARK_DETAIL} />
                     </td>
                     {MONTHS.map((m, i) => {
@@ -1595,7 +1664,7 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD' }) {
                   {row.label}
                   {row.formula && <InfoTip text={row.formula} />}
                 </td>
-                <td style={{ padding: '4px 8px', textAlign: 'center' }}>
+                <td style={{ padding: '4px 20px 4px 6px', textAlign: 'center' }}>
                   <Sparkline values={sparkValues(row.values)} color={C.primary} strokeWidth={1.8} />
                 </td>
                 {row.values.map((v, i) => {
@@ -1797,11 +1866,11 @@ const TwoCol = ({ children }) => (
 // Installs & Users tab (internal keys keep the legacy "download" naming)
 // ─────────────────────────────────────────────────────────────────────────────
 const STORE_KEYS = [
-  ['dl_kaios', 'KaiOS', C.blue],
-  ['dl_googlePlay', 'Google Play', C.green],
-  ['dl_palmStore', 'Palm Store', C.amber],
-  ['dl_indusStore', 'Indus Store', C.purple],
-  ['dl_vivoStore', 'Vivo Store', C.red],
+  ['dl_kaios', 'KaiOS', PASTEL.blue],
+  ['dl_googlePlay', 'Google Play', PASTEL.mint],
+  ['dl_palmStore', 'Palm Store', PASTEL.sand],
+  ['dl_indusStore', 'Indus Store', PASTEL.lavender],
+  ['dl_vivoStore', 'Vivo Store', PASTEL.coral],
 ];
 
 function DownloadsTab({ yearData, updateMetric, allYears, activeYear }) {
@@ -2061,11 +2130,11 @@ function TransactionsTab({ yearData, updateMetric, allYears, activeYear }) {
           <YAxis {...yAxis()} yAxisId="left" />
           <Tooltip content={<ChartTooltip fmt={fmtUSDT} reported={latest} />} />
           <Legend wrapperStyle={{ fontSize: 11 }} itemSorter={null} />
-          <Bar yAxisId="left" dataKey="Send" stackId="v" fill={C.amber} barSize={20} />
-          <Bar yAxisId="left" dataKey="Receive" stackId="v" fill={C.green} barSize={20} />
-          <Bar yAxisId="left" dataKey="Cash-Out" stackId="v" fill={C.blue} barSize={20} />
-          <Bar yAxisId="left" dataKey="Top-up Cards" stackId="v" fill={C.purple} barSize={20} />
-          <Bar yAxisId="left" dataKey="Other" stackId="v" fill={C.gray400} barSize={20} radius={[4, 4, 0, 0]} />
+          <Bar yAxisId="left" dataKey="Send" stackId="v" fill={PASTEL.blue} barSize={20} />
+          <Bar yAxisId="left" dataKey="Receive" stackId="v" fill={PASTEL.mint} barSize={20} />
+          <Bar yAxisId="left" dataKey="Cash-Out" stackId="v" fill={PASTEL.sky} barSize={20} />
+          <Bar yAxisId="left" dataKey="Top-up Cards" stackId="v" fill={PASTEL.lavender} barSize={20} />
+          <Bar yAxisId="left" dataKey="Other" stackId="v" fill={PASTEL.gray} barSize={20} radius={[4, 4, 0, 0]} />
         </ComposedChart>
       </ChartCard>
     </div>
@@ -2084,9 +2153,9 @@ const TX_CARD_MISMATCH =
 // totals stored in the first month slot. Colours follow the table row order.
 const SNAP_IDX = 0;
 const MARKETS = [
-  { name: 'Kenya', color: C.purple, sold: 'c_mktKE_sold', value: 'c_mktKE_value', users: 'c_mktKE_users', disc: 'c_mktKE_disc', cac: 'c_mktKE_cac' },
-  { name: 'Nigeria', color: C.blue, sold: 'c_mktNG_sold', value: 'c_mktNG_value', users: 'c_mktNG_users', disc: 'c_mktNG_disc', cac: 'c_mktNG_cac' },
-  { name: 'Tanzania', color: C.amber, sold: 'c_mktTZ_sold', value: 'c_mktTZ_value', users: 'c_mktTZ_users', disc: 'c_mktTZ_disc', cac: 'c_mktTZ_cac' },
+  { name: 'Kenya', color: PASTEL.lavender, sold: 'c_mktKE_sold', value: 'c_mktKE_value', users: 'c_mktKE_users', disc: 'c_mktKE_disc', cac: 'c_mktKE_cac' },
+  { name: 'Nigeria', color: PASTEL.blue, sold: 'c_mktNG_sold', value: 'c_mktNG_value', users: 'c_mktNG_users', disc: 'c_mktNG_disc', cac: 'c_mktNG_cac' },
+  { name: 'Tanzania', color: PASTEL.sand, sold: 'c_mktTZ_sold', value: 'c_mktTZ_value', users: 'c_mktTZ_users', disc: 'c_mktTZ_disc', cac: 'c_mktTZ_cac' },
 ];
 
 function CardsTab({ yearData, updateMetric, allYears, activeYear }) {
@@ -2215,13 +2284,13 @@ function CardsTab({ yearData, updateMetric, allYears, activeYear }) {
             <YAxis {...yAxis({ orientation: 'right' })} yAxisId="right" />
             <Tooltip content={<ChartTooltip fmt={fmtNumber} reported={latest} />} />
             <Legend wrapperStyle={{ fontSize: 11 }} itemSorter={null} />
-            <Bar yAxisId="left" dataKey="Cards Sold" fill={C.purple} barSize={18} radius={[4, 4, 0, 0]} />
-            <Line yAxisId="right" type="monotone" dataKey="Unique Users" stroke={C.blue} strokeWidth={2} dot={false} connectNulls />
+            <Bar yAxisId="left" dataKey="Cards Sold" fill={PASTEL.lavender} barSize={18} radius={[4, 4, 0, 0]} />
+            <Line yAxisId="right" type="monotone" dataKey="Unique Users" stroke={PASTEL.blue} strokeWidth={2} dot={false} connectNulls />
             <Line
               yAxisId="right"
               type="monotone"
               dataKey="Unique Users__up"
-              stroke={C.blue}
+              stroke={PASTEL.blue}
               strokeOpacity={0.4}
               strokeWidth={2}
               strokeDasharray="6 6"
@@ -2515,8 +2584,8 @@ function RevenueTab({ yearData, updateMetric }) {
           <YAxis {...yAxis()} />
           <Tooltip content={<ChartTooltip fmt={fmtNumber} reported={latest} />} />
           <Legend wrapperStyle={{ fontSize: 11 }} itemSorter={null} />
-          <Bar dataKey="Revenue" fill={C.green} barSize={18} radius={[4, 4, 0, 0]} />
-          <Bar dataKey="Cost of Revenue" fill={C.red} barSize={18} radius={[4, 4, 0, 0]} />
+          <Bar dataKey="Revenue" fill={PASTEL.mint} barSize={18} radius={[4, 4, 0, 0]} />
+          <Bar dataKey="Cost of Revenue" fill={PASTEL.coral} barSize={18} radius={[4, 4, 0, 0]} />
         </ComposedChart>
       </ChartCard>
     </div>
