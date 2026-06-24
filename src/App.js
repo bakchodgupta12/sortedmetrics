@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   Area,
@@ -19,22 +19,30 @@ import {
 } from 'recharts';
 import {
   MONTHS,
-  SECURITY_QUESTIONS,
+  PASSWORD_RULE,
+  ROLES,
   changePassword,
-  createUser,
-  deleteAccount,
+  createAccount,
   emptyYear,
   getUser,
   getLastUpdated,
   isConfigured,
+  isValidPassword,
+  listAccounts,
   listYears,
+  loadSharedData,
   normaliseData,
-  resetPassword,
+  removeAccount,
   saveData,
+  setAccountRole,
   updateDisplayName,
   verifyPassword,
-  verifySecurityAnswer,
 } from './supabase';
+
+// Shared edit permission: false for read-only Members, true for Owners. The
+// editable Cell reads this so every metric input across every tab becomes
+// static text for Members without threading a prop through each table.
+const EditableContext = React.createContext(true);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Number formatting
@@ -182,27 +190,14 @@ function Field({ label, children }) {
 }
 
 function AuthScreen({ onLogin }) {
-  // step: 'username' | 'login' | 'register' | 'forgot'
+  // step: 'username' | 'login'. Accounts are created by an Owner — there is no
+  // self-signup and no security-question recovery.
   const [step, setStep] = useState('username');
   const [username, setUsername] = useState('');
-  const [row, setRow] = useState(null); // existing user row, when known
+  const [row, setRow] = useState(null); // existing account row, when known
+  const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-
-  // form fields
-  const [password, setPassword] = useState('');
-  const [password2, setPassword2] = useState('');
-  const [displayName, setDisplayName] = useState('');
-  const [question, setQuestion] = useState(SECURITY_QUESTIONS[0]);
-  const [answer, setAnswer] = useState('');
-
-  const reset = () => {
-    setPassword('');
-    setPassword2('');
-    setDisplayName('');
-    setAnswer('');
-    setError('');
-  };
 
   const submitUsername = async (e) => {
     e.preventDefault();
@@ -211,12 +206,12 @@ function AuthScreen({ onLogin }) {
     setError('');
     try {
       const existing = await getUser(username);
-      reset();
       if (existing) {
         setRow(existing);
+        setPassword('');
         setStep('login');
       } else {
-        setStep('register');
+        setError('No account found for that username. Ask an Owner to create one for you.');
       }
     } catch (err) {
       setError(err.message || 'Could not reach the server.');
@@ -243,69 +238,9 @@ function AuthScreen({ onLogin }) {
     }
   };
 
-  const submitRegister = async (e) => {
-    e.preventDefault();
-    if (password.length < 6) {
-      setError('Password must be at least 6 characters.');
-      return;
-    }
-    if (password !== password2) {
-      setError('Passwords do not match.');
-      return;
-    }
-    if (!answer.trim()) {
-      setError('Please answer your security question.');
-      return;
-    }
-    setBusy(true);
-    setError('');
-    try {
-      const created = await createUser({
-        username,
-        password,
-        securityQuestion: question,
-        securityAnswer: answer,
-        displayName: displayName.trim() || username.trim(),
-        initialYear: new Date().getFullYear(),
-      });
-      onLogin(created);
-    } catch (err) {
-      setError(err.message || 'Could not create account.');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const submitForgot = async (e) => {
-    e.preventDefault();
-    if (password.length < 6) {
-      setError('Password must be at least 6 characters.');
-      return;
-    }
-    if (password !== password2) {
-      setError('Passwords do not match.');
-      return;
-    }
-    setBusy(true);
-    setError('');
-    try {
-      const ok = await verifySecurityAnswer(row, answer);
-      if (!ok) {
-        setError('That answer does not match.');
-        return;
-      }
-      await resetPassword(username, password);
-      const refreshed = await getUser(username);
-      onLogin(refreshed);
-    } catch (err) {
-      setError(err.message || 'Could not reset password.');
-    } finally {
-      setBusy(false);
-    }
-  };
-
   const back = () => {
-    reset();
+    setPassword('');
+    setError('');
     setRow(null);
     setStep('username');
   };
@@ -380,109 +315,6 @@ function AuthScreen({ onLogin }) {
               </Field>
               <button style={authBtn(busy)} disabled={busy}>
                 {busy ? 'Signing in…' : 'Sign in'}
-              </button>
-              <div style={{ marginTop: 12, textAlign: 'center' }}>
-                <button
-                  type="button"
-                  onClick={() => {
-                    reset();
-                    setStep('forgot');
-                  }}
-                  style={linkBtn}
-                >
-                  Forgot password?
-                </button>
-              </div>
-            </form>
-          )}
-
-          {step === 'register' && (
-            <form onSubmit={submitRegister}>
-              <p style={{ fontSize: 14, marginTop: 0 }}>
-                Setting up <strong>{username}</strong>. Choose a password and a
-                security question.
-              </p>
-              <Field label="Display name">
-                <input
-                  style={authInput}
-                  value={displayName}
-                  onChange={(e) => setDisplayName(e.target.value)}
-                  placeholder={username}
-                />
-              </Field>
-              <Field label="Password">
-                <input
-                  style={authInput}
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                />
-              </Field>
-              <Field label="Confirm password">
-                <input
-                  style={authInput}
-                  type="password"
-                  value={password2}
-                  onChange={(e) => setPassword2(e.target.value)}
-                />
-              </Field>
-              <Field label="Security question">
-                <select
-                  style={authInput}
-                  value={question}
-                  onChange={(e) => setQuestion(e.target.value)}
-                >
-                  {SECURITY_QUESTIONS.map((q) => (
-                    <option key={q} value={q}>
-                      {q}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-              <Field label="Answer">
-                <input
-                  style={authInput}
-                  value={answer}
-                  onChange={(e) => setAnswer(e.target.value)}
-                />
-              </Field>
-              <button style={authBtn(busy)} disabled={busy}>
-                {busy ? 'Creating…' : 'Create account'}
-              </button>
-            </form>
-          )}
-
-          {step === 'forgot' && (
-            <form onSubmit={submitForgot}>
-              <p style={{ fontSize: 14, marginTop: 0 }}>
-                Reset password for <strong>{username}</strong>.
-              </p>
-              <Field label={row?.security_question || 'Security question'}>
-                <input
-                  style={authInput}
-                  autoFocus
-                  value={answer}
-                  onChange={(e) => setAnswer(e.target.value)}
-                />
-              </Field>
-              <Field label="New password">
-                <input
-                  style={authInput}
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                />
-              </Field>
-              <Field label="Confirm new password">
-                <input
-                  style={authInput}
-                  type="password"
-                  value={password2}
-                  onChange={(e) => setPassword2(e.target.value)}
-                />
-              </Field>
-              <button style={authBtn(busy)} disabled={busy}>
-                {busy ? 'Resetting…' : 'Reset password'}
               </button>
             </form>
           )}
@@ -578,29 +410,24 @@ function App() {
 const SAVE_DEBOUNCE_MS = 1500;
 
 function Dashboard({ user, setUser, onLogout }) {
-  const [data, setData] = useState(() => {
-    const norm = normaliseData(user.data);
-    if (Object.keys(norm.years).length === 0) {
-      norm.years[String(new Date().getFullYear())] = emptyYear();
-    }
-    return norm;
-  });
+  // Owners can edit and manage the team; Members are read-only + download.
+  const canEdit = user.role === ROLES.OWNER;
 
-  const years = useMemo(() => listYears(data), [data]);
-  const [activeYear, setActiveYear] = useState(() => {
-    const current = new Date().getFullYear();
-    const ys = listYears(data);
-    return ys.includes(current) ? current : ys[ys.length - 1] || current;
-  });
+  // The metrics dataset is shared team-wide and loaded once on mount.
+  const [data, setData] = useState(null);
+  const [loadingData, setLoadingData] = useState(true);
+  const [loadError, setLoadError] = useState('');
+  const [activeYear, setActiveYear] = useState(() => new Date().getFullYear());
   const [activeTab, setActiveTab] = useState('Dashboard');
+
+  const years = useMemo(() => (data ? listYears(data) : []), [data]);
 
   // Save status: 'idle' | 'saving' | 'saved' | 'error'
   const [saveStatus, setSaveStatus] = useState('idle');
-  // Team-wide "last updated" timestamp (most recent updated_at across all
-  // rows). Seeded from this user's row, then refined from the table maximum.
-  const [lastUpdated, setLastUpdated] = useState(user.updated_at || null);
+  // Team-wide "last updated" timestamp (the shared dataset's updated_at).
+  const [lastUpdated, setLastUpdated] = useState(null);
   const saveTimer = useRef(null);
-  const skipNextSave = useRef(true); // don't save on initial mount
+  const skipNextSave = useRef(true); // don't save on initial mount / load
 
   // Best-effort refresh of the freshness indicator; never blocks the UI.
   const loadLastUpdated = useCallback(async () => {
@@ -612,6 +439,33 @@ function Dashboard({ user, setUser, onLogout }) {
     }
   }, []);
 
+  // Load the shared dataset once on mount.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const raw = await loadSharedData();
+        const norm = normaliseData(raw || {});
+        if (Object.keys(norm.years).length === 0) {
+          norm.years[String(new Date().getFullYear())] = emptyYear();
+        }
+        if (cancelled) return;
+        skipNextSave.current = true;
+        setData(norm);
+        const ys = listYears(norm);
+        const cur = new Date().getFullYear();
+        setActiveYear(ys.includes(cur) ? cur : ys[ys.length - 1] || cur);
+      } catch (e) {
+        if (!cancelled) setLoadError(e.message || 'Could not load data.');
+      } finally {
+        if (!cancelled) setLoadingData(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   useEffect(() => {
     loadLastUpdated();
   }, [loadLastUpdated]);
@@ -620,48 +474,52 @@ function Dashboard({ user, setUser, onLogout }) {
     async (next) => {
       setSaveStatus('saving');
       try {
-        await saveData(user.username, next);
+        await saveData(next);
         setSaveStatus('saved');
         loadLastUpdated();
       } catch (err) {
         setSaveStatus('error');
       }
     },
-    [user.username, loadLastUpdated]
+    [loadLastUpdated]
   );
 
-  // Debounced auto-save whenever data changes.
+  // Debounced auto-save whenever the shared data changes (owners only).
   useEffect(() => {
     if (skipNextSave.current) {
       skipNextSave.current = false;
       return;
     }
+    if (!canEdit || data == null) return;
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => persist(data), SAVE_DEBOUNCE_MS);
     return () => saveTimer.current && clearTimeout(saveTimer.current);
-  }, [data, persist]);
+  }, [data, persist, canEdit]);
 
   const refresh = useCallback(async () => {
     setSaveStatus('saving');
     try {
-      const row = await getUser(user.username);
-      if (row) {
-        const norm = normaliseData(row.data);
-        skipNextSave.current = true;
-        setData(norm);
-        setUser(row);
-        setSaveStatus('saved');
-        loadLastUpdated();
+      const [raw, row] = await Promise.all([loadSharedData(), getUser(user.username)]);
+      const norm = normaliseData(raw || {});
+      if (Object.keys(norm.years).length === 0) {
+        norm.years[String(new Date().getFullYear())] = emptyYear();
       }
+      skipNextSave.current = true;
+      setData(norm);
+      if (row) setUser(row);
+      setSaveStatus('saved');
+      loadLastUpdated();
     } catch {
       setSaveStatus('error');
     }
   }, [user.username, setUser, loadLastUpdated]);
 
-  // Edit a single metric cell for the active year.
+  // Edit a single metric cell for the active year (owners only).
   const updateMetric = useCallback(
     (metricKey, month, value) => {
+      if (!canEdit) return;
       setData((prev) => {
+        if (!prev) return prev;
         const y = String(activeYear);
         const year = prev.years[y] || emptyYear();
         const metric = { ...(year[metricKey] || {}) };
@@ -676,12 +534,14 @@ function Dashboard({ user, setUser, onLogout }) {
         };
       });
     },
-    [activeYear]
+    [activeYear, canEdit]
   );
 
   const updateNote = useCallback(
     (month, text) => {
+      if (!canEdit) return;
       setData((prev) => {
+        if (!prev) return prev;
         const y = String(activeYear);
         const year = prev.years[y] || emptyYear();
         const notes = { ...(year.notes || {}) };
@@ -693,74 +553,82 @@ function Dashboard({ user, setUser, onLogout }) {
         };
       });
     },
-    [activeYear]
+    [activeYear, canEdit]
   );
 
-  // Year management
+  // Year management (owners only).
   const addYear = (year) => {
+    if (!canEdit) return;
     setData((prev) => {
-      if (prev.years[year]) return prev;
+      if (!prev || prev.years[year]) return prev;
       return { ...prev, years: { ...prev.years, [year]: emptyYear() } };
     });
     setActiveYear(Number(year));
   };
 
-  const deleteYear = (year) => {
-    setData((prev) => {
-      const next = { ...prev, years: { ...prev.years } };
-      delete next.years[year];
-      return next;
-    });
-    setActiveYear((cur) => {
-      if (Number(year) !== cur) return cur;
-      const remaining = listYears(data).filter((y) => y !== Number(year));
-      return remaining[remaining.length - 1] || new Date().getFullYear();
-    });
-  };
+  if (loadingData || data == null) {
+    return (
+      <div
+        style={{
+          minHeight: '100vh',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          color: loadError ? C.red : C.muted,
+          padding: 20,
+          textAlign: 'center',
+        }}
+      >
+        {loadError ? `Could not load data: ${loadError}` : 'Loading…'}
+      </div>
+    );
+  }
 
   const yearData = data.years[String(activeYear)] || emptyYear();
 
   return (
-    <div style={{ minHeight: '100vh' }}>
-      <TopNav
-        saveStatus={saveStatus}
-        lastUpdated={lastUpdated}
-        onRefresh={refresh}
-        onLogout={onLogout}
-        onOpenSettings={() => setActiveTab('Settings')}
-        settingsActive={activeTab === 'Settings'}
-      />
-      <TabBar
-        activeTab={activeTab}
-        onChange={setActiveTab}
-        years={years}
-        activeYear={activeYear}
-        onYearChange={setActiveYear}
-        onAddYear={addYear}
-      />
-
-      <main
-        style={{
-          maxWidth: 1120,
-          margin: '0 auto',
-          padding: '24px 20px 64px',
-        }}
-      >
-        <TabContent
-          tab={activeTab}
-          yearData={yearData}
-          activeYear={activeYear}
-          years={years}
-          allYears={data.years}
-          user={user}
-          setUser={setUser}
-          updateMetric={updateMetric}
-          updateNote={updateNote}
-          onDeleteYear={deleteYear}
+    <EditableContext.Provider value={canEdit}>
+      <div style={{ minHeight: '100vh' }}>
+        <TopNav
+          saveStatus={saveStatus}
+          lastUpdated={lastUpdated}
+          onRefresh={refresh}
           onLogout={onLogout}
+          onOpenSettings={() => setActiveTab('Settings')}
+          settingsActive={activeTab === 'Settings'}
         />
-      </main>
-    </div>
+        <TabBar
+          activeTab={activeTab}
+          onChange={setActiveTab}
+          years={years}
+          activeYear={activeYear}
+          onYearChange={setActiveYear}
+          onAddYear={addYear}
+          canAddYear={canEdit}
+        />
+
+        <main
+          style={{
+            maxWidth: 1120,
+            margin: '0 auto',
+            padding: '24px 20px 64px',
+          }}
+        >
+          <TabContent
+            tab={activeTab}
+            yearData={yearData}
+            activeYear={activeYear}
+            years={years}
+            allYears={data.years}
+            user={user}
+            setUser={setUser}
+            canEdit={canEdit}
+            updateMetric={updateMetric}
+            updateNote={updateNote}
+          />
+        </main>
+      </div>
+    </EditableContext.Provider>
   );
 }
 
@@ -898,7 +766,7 @@ function TopNav({ saveStatus, lastUpdated, onRefresh, onLogout, onOpenSettings, 
   );
 }
 
-function TabBar({ activeTab, onChange, years, activeYear, onYearChange, onAddYear }) {
+function TabBar({ activeTab, onChange, years, activeYear, onYearChange, onAddYear, canAddYear }) {
   const addNewYear = () => {
     const input = window.prompt('Add year (e.g. 2027):');
     if (!input) return;
@@ -987,7 +855,7 @@ function TabBar({ activeTab, onChange, years, activeYear, onYearChange, onAddYea
               {y}
             </option>
           ))}
-          <option value="__add__">+ Add year…</option>
+          {canAddYear && <option value="__add__">+ Add year…</option>}
         </select>
       </div>
     </nav>
@@ -1147,8 +1015,28 @@ function valueAt(s, i) {
 // Editable cell + info tooltip
 // ─────────────────────────────────────────────────────────────────────────────
 function Cell({ value, unit, onCommit, inputStyle }) {
+  const editable = useContext(EditableContext);
   const [focused, setFocused] = useState(false);
   const [draft, setDraft] = useState('');
+
+  // Read-only (Member) view: show the same figure, but as plain text — no
+  // input, no focus affordance, not editable.
+  if (!editable) {
+    return (
+      <span
+        style={{
+          display: 'block',
+          textAlign: 'right',
+          fontSize: 13,
+          color: C.text,
+          padding: '6px 4px',
+          ...inputStyle,
+        }}
+      >
+        {value == null ? DASH : fmtByUnit(value, unit)}
+      </span>
+    );
+  }
   // Money fields (USD / USDT / money ratios) carry a "$" prefix at rest and
   // while editing; counts and percentages do not.
   const isMoney = unit === 'usd' || unit === 'usdt' || unit === 'ratio';
@@ -2582,10 +2470,9 @@ function TabContent({
   years,
   user,
   setUser,
+  canEdit,
   updateMetric,
   updateNote,
-  onDeleteYear,
-  onLogout,
   allYears,
 }) {
   const common = { yearData, activeYear, updateMetric, updateNote, allYears };
@@ -2603,16 +2490,7 @@ function TabContent({
     case 'Campaigns':
       return <CampaignsTab {...common} />;
     case 'Settings':
-      return (
-        <SettingsTab
-          user={user}
-          setUser={setUser}
-          activeYear={activeYear}
-          years={years}
-          onDeleteYear={onDeleteYear}
-          onLogout={onLogout}
-        />
-      );
+      return <SettingsTab user={user} setUser={setUser} canEdit={canEdit} />;
     case 'Dashboard':
     default:
       return (
@@ -2622,9 +2500,28 @@ function TabContent({
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Settings (shell-level: display name, password, year + account management)
+// Settings — profile + password for everyone; team management for owners.
 // ─────────────────────────────────────────────────────────────────────────────
-function SettingsTab({ user, setUser, activeYear, years, onDeleteYear, onLogout }) {
+const settingsSectionLabel = {
+  fontSize: 10,
+  fontWeight: 500,
+  letterSpacing: '0.08em',
+  textTransform: 'uppercase',
+  color: C.muted,
+};
+const settingsSmallBtn = {
+  border: 'none',
+  background: C.primary,
+  color: '#fff',
+  borderRadius: 8,
+  padding: '8px 14px',
+  fontWeight: 600,
+  fontSize: 13,
+  marginTop: 12,
+  cursor: 'pointer',
+};
+
+function SettingsTab({ user, setUser, canEdit }) {
   const [displayName, setDisplayName] = useState(user.display_name || '');
   const [msg, setMsg] = useState('');
 
@@ -2633,13 +2530,14 @@ function SettingsTab({ user, setUser, activeYear, years, onDeleteYear, onLogout 
   const [newPw2, setNewPw2] = useState('');
   const [pwMsg, setPwMsg] = useState('');
 
-  const [confirmDelete, setConfirmDelete] = useState('');
+  const settingInput = { ...authInput, maxWidth: 320 };
 
   const saveName = async () => {
     setMsg('');
     try {
-      await updateDisplayName(user.username, displayName.trim() || user.username);
-      setUser({ ...user, display_name: displayName.trim() || user.username });
+      const name = displayName.trim() || user.username;
+      await updateDisplayName(user.username, name);
+      setUser({ ...user, display_name: name });
       setMsg('Display name updated.');
     } catch (e) {
       setMsg(e.message || 'Could not update.');
@@ -2654,8 +2552,8 @@ function SettingsTab({ user, setUser, activeYear, years, onDeleteYear, onLogout 
         setPwMsg('Current password is incorrect.');
         return;
       }
-      if (newPw.length < 6) {
-        setPwMsg('New password must be at least 6 characters.');
+      if (!isValidPassword(newPw)) {
+        setPwMsg(`New password must be ${PASSWORD_RULE}.`);
         return;
       }
       if (newPw !== newPw2) {
@@ -2674,49 +2572,10 @@ function SettingsTab({ user, setUser, activeYear, years, onDeleteYear, onLogout 
     }
   };
 
-  const doDeleteYear = () => {
-    if (years.length <= 1) {
-      window.alert('You cannot delete your only year.');
-      return;
-    }
-    if (window.confirm(`Delete all data for ${activeYear}? This cannot be undone.`)) {
-      onDeleteYear(activeYear);
-    }
-  };
-
-  const doDeleteAccount = async () => {
-    if (confirmDelete !== 'DELETE') return;
-    try {
-      await deleteAccount(user.username);
-      onLogout();
-    } catch (e) {
-      window.alert(e.message || 'Could not delete account.');
-    }
-  };
-
-  const sectionLabel = {
-    fontSize: 10,
-    fontWeight: 500,
-    letterSpacing: '0.08em',
-    textTransform: 'uppercase',
-    color: C.muted,
-  };
-  const settingInput = { ...authInput, maxWidth: 320 };
-  const smallBtn = {
-    border: 'none',
-    background: C.primary,
-    color: '#fff',
-    borderRadius: 8,
-    padding: '8px 14px',
-    fontWeight: 600,
-    fontSize: 13,
-    marginTop: 12,
-  };
-
   return (
-    <div style={{ display: 'grid', gap: 16, maxWidth: 560 }}>
+    <div style={{ display: 'grid', gap: 16, maxWidth: 640 }}>
       <Card accent={C.primary}>
-        <div style={sectionLabel}>Profile</div>
+        <div style={settingsSectionLabel}>Profile</div>
         <h2 style={{ fontSize: 18, margin: '4px 0 12px' }}>Display name</h2>
         <input
           style={settingInput}
@@ -2724,18 +2583,19 @@ function SettingsTab({ user, setUser, activeYear, years, onDeleteYear, onLogout 
           onChange={(e) => setDisplayName(e.target.value)}
         />
         <div>
-          <button style={smallBtn} onClick={saveName}>
+          <button style={settingsSmallBtn} onClick={saveName}>
             Save
           </button>
         </div>
         <div style={{ fontSize: 12, color: C.muted, marginTop: 8 }}>
-          Username: <strong>{user.username}</strong> (cannot be changed)
+          Username: <strong>{user.username}</strong> (cannot be changed) · Role:{' '}
+          <strong>{user.role === ROLES.OWNER ? 'Owner' : 'Member'}</strong>
         </div>
         {msg && <p style={{ color: C.green, fontSize: 13 }}>{msg}</p>}
       </Card>
 
       <Card accent={C.primary}>
-        <div style={sectionLabel}>Security</div>
+        <div style={settingsSectionLabel}>Security</div>
         <h2 style={{ fontSize: 18, margin: '4px 0 12px' }}>Change password</h2>
         <input
           style={{ ...settingInput, marginTop: 0 }}
@@ -2747,7 +2607,7 @@ function SettingsTab({ user, setUser, activeYear, years, onDeleteYear, onLogout 
         <input
           style={settingInput}
           type="password"
-          placeholder="New password"
+          placeholder={`New password (${PASSWORD_RULE})`}
           value={newPw}
           onChange={(e) => setNewPw(e.target.value)}
         />
@@ -2759,7 +2619,7 @@ function SettingsTab({ user, setUser, activeYear, years, onDeleteYear, onLogout 
           onChange={(e) => setNewPw2(e.target.value)}
         />
         <div>
-          <button style={smallBtn} onClick={doChangePassword}>
+          <button style={settingsSmallBtn} onClick={doChangePassword}>
             Update password
           </button>
         </div>
@@ -2773,70 +2633,204 @@ function SettingsTab({ user, setUser, activeYear, years, onDeleteYear, onLogout 
             {pwMsg}
           </p>
         )}
-        <div style={{ fontSize: 12, color: C.muted, marginTop: 12 }}>
-          Security question: <strong>{user.security_question}</strong>
-        </div>
       </Card>
 
-      <Card accent={C.primary}>
-        <div style={sectionLabel}>Data</div>
-        <h2 style={{ fontSize: 18, margin: '4px 0 12px' }}>Delete year</h2>
-        <p style={{ fontSize: 13, color: C.muted, marginTop: 0 }}>
-          Permanently remove all data for the currently selected year (
-          {activeYear}).
-        </p>
-        <button
-          style={{ ...smallBtn, background: C.red, marginTop: 0 }}
-          onClick={doDeleteYear}
-        >
-          Delete {activeYear}
-        </button>
-      </Card>
-
-      <Card accent={C.red}>
-        <div style={sectionLabel}>Danger zone</div>
-        <h2 style={{ fontSize: 18, margin: '4px 0 12px' }}>Delete account</h2>
-        <p style={{ fontSize: 13, color: C.muted, marginTop: 0 }}>
-          This permanently deletes your account and all metrics. Type{' '}
-          <strong>DELETE</strong> to confirm.
-        </p>
-        <input
-          style={{ ...settingInput, marginTop: 0 }}
-          value={confirmDelete}
-          onChange={(e) => setConfirmDelete(e.target.value)}
-          placeholder="DELETE"
-        />
-        <div>
-          <button
-            style={{
-              ...smallBtn,
-              background: confirmDelete === 'DELETE' ? C.red : C.gray400,
-              cursor: confirmDelete === 'DELETE' ? 'pointer' : 'not-allowed',
-            }}
-            onClick={doDeleteAccount}
-            disabled={confirmDelete !== 'DELETE'}
-          >
-            Delete my account
-          </button>
-        </div>
-      </Card>
-
-      <Card>
-        <button
-          style={{
-            border: `1px solid ${C.border}`,
-            background: '#fff',
-            borderRadius: 8,
-            padding: '10px 16px',
-            fontSize: 14,
-            fontWeight: 600,
-          }}
-          onClick={onLogout}
-        >
-          Log out
-        </button>
-      </Card>
+      {canEdit && <TeamPanel user={user} />}
     </div>
+  );
+}
+
+// Owner-only team management: list accounts, add members, promote Members to
+// Owner, and remove Members. Owners are protected peers — they cannot be
+// demoted or removed here, which prevents anyone from locking the team out.
+function TeamPanel({ user }) {
+  const [accounts, setAccounts] = useState(null);
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const [newUsername, setNewUsername] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [newRole, setNewRole] = useState(ROLES.MEMBER);
+  const [addMsg, setAddMsg] = useState('');
+
+  const settingInput = { ...authInput, maxWidth: 320, marginTop: 0 };
+
+  const reload = useCallback(async () => {
+    try {
+      setAccounts(await listAccounts());
+    } catch (e) {
+      setErr(e.message || 'Could not load the team.');
+    }
+  }, []);
+
+  useEffect(() => {
+    reload();
+  }, [reload]);
+
+  const addMember = async () => {
+    setAddMsg('');
+    const uname = newUsername.trim().toLowerCase();
+    if (!uname) {
+      setAddMsg('Enter a username.');
+      return;
+    }
+    if (!isValidPassword(newPassword)) {
+      setAddMsg(`Password must be ${PASSWORD_RULE}.`);
+      return;
+    }
+    setBusy(true);
+    try {
+      await createAccount({ username: uname, password: newPassword, displayName: uname, role: newRole });
+      setNewUsername('');
+      setNewPassword('');
+      setNewRole(ROLES.MEMBER);
+      setAddMsg('Account created.');
+      await reload();
+    } catch (e) {
+      const dup = String(e.message || '').toLowerCase().includes('duplicate');
+      setAddMsg(dup ? 'That username already exists.' : e.message || 'Could not add member.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const promote = async (account) => {
+    setErr('');
+    setBusy(true);
+    try {
+      await setAccountRole(account.username, ROLES.OWNER);
+      await reload();
+    } catch (e) {
+      setErr(e.message || 'Could not change role.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async (account) => {
+    setErr('');
+    if (!window.confirm(`Remove ${account.display_name || account.username}? This permanently deletes their account.`)) {
+      return;
+    }
+    setBusy(true);
+    try {
+      await removeAccount(account.username);
+      await reload();
+    } catch (e) {
+      setErr(e.message || 'Could not remove member.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const ghostBtn = {
+    border: `1px solid ${C.border}`,
+    background: '#fff',
+    borderRadius: 7,
+    padding: '5px 10px',
+    fontSize: 12,
+    fontWeight: 600,
+    cursor: 'pointer',
+    color: C.text,
+  };
+  const roleBadge = (role) => ({
+    fontSize: 11,
+    fontWeight: 700,
+    letterSpacing: '0.04em',
+    textTransform: 'uppercase',
+    color: role === ROLES.OWNER ? C.primary : C.muted,
+  });
+
+  return (
+    <Card accent={C.primary}>
+      <div style={settingsSectionLabel}>Team</div>
+      <h2 style={{ fontSize: 18, margin: '4px 0 12px' }}>Members</h2>
+
+      {accounts == null ? (
+        <p style={{ fontSize: 13, color: C.muted }}>Loading team…</p>
+      ) : (
+        <div style={{ display: 'grid', gap: 2 }}>
+          {accounts.map((a) => {
+            const isOwner = a.role === ROLES.OWNER;
+            const isSelf = a.username === user.username;
+            return (
+              <div
+                key={a.username}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 12,
+                  padding: '8px 0',
+                  borderBottom: `1px solid ${C.bg}`,
+                }}
+              >
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 14, fontWeight: 600 }}>
+                    {a.display_name || a.username}
+                    {isSelf && <span style={{ color: C.muted, fontWeight: 400 }}> · you</span>}
+                  </div>
+                  <div style={{ fontSize: 12, color: C.muted }}>{a.username}</div>
+                </div>
+                <span style={roleBadge(a.role)}>{isOwner ? 'Owner' : 'Member'}</span>
+                <div style={{ display: 'flex', gap: 6, minWidth: 168, justifyContent: 'flex-end' }}>
+                  {isOwner ? (
+                    // Owners are protected — no demote, no remove.
+                    <span style={{ fontSize: 12, color: C.muted }}>Protected</span>
+                  ) : (
+                    <>
+                      <button style={ghostBtn} disabled={busy} onClick={() => promote(a)}>
+                        Make Owner
+                      </button>
+                      <button
+                        style={{ ...ghostBtn, color: C.red, borderColor: C.red }}
+                        disabled={busy}
+                        onClick={() => remove(a)}
+                      >
+                        Remove
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {err && <p style={{ color: C.red, fontSize: 13 }}>{err}</p>}
+
+      <h3 style={{ fontSize: 14, margin: '18px 0 10px' }}>Add a member</h3>
+      <div style={{ display: 'grid', gap: 8, maxWidth: 320 }}>
+        <input
+          style={settingInput}
+          placeholder="Username"
+          value={newUsername}
+          onChange={(e) => setNewUsername(e.target.value)}
+        />
+        <input
+          style={settingInput}
+          type="password"
+          placeholder={`Initial password (${PASSWORD_RULE})`}
+          value={newPassword}
+          onChange={(e) => setNewPassword(e.target.value)}
+        />
+        <select
+          style={{ ...settingInput, cursor: 'pointer' }}
+          value={newRole}
+          onChange={(e) => setNewRole(e.target.value)}
+        >
+          <option value={ROLES.MEMBER}>Member</option>
+          <option value={ROLES.OWNER}>Owner</option>
+        </select>
+      </div>
+      <div>
+        <button style={settingsSmallBtn} disabled={busy} onClick={addMember}>
+          {busy ? 'Working…' : 'Add member'}
+        </button>
+      </div>
+      {addMsg && (
+        <p style={{ color: addMsg.includes('created') ? C.green : C.red, fontSize: 13 }}>{addMsg}</p>
+      )}
+    </Card>
   );
 }
 

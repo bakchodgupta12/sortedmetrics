@@ -22,7 +22,11 @@ export const supabase = isConfigured
   ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
   : null;
 
+// Accounts (credentials + role) live in `metrics_data`; the team's metrics are
+// a single shared dataset in `shared_metrics` (one row, id = 1).
 const TABLE = 'metrics_data';
+const SHARED = 'shared_metrics';
+const SHARED_ID = 1;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Hashing — SHA-256 with a per-user salt, all done client-side via Web Crypto.
@@ -49,19 +53,13 @@ export function hashPassword(password, salt) {
   return sha256Hex(`${salt}::${password}`);
 }
 
-// Security answers are normalised so "Fluffy" and " fluffy " match.
-export function hashSecurityAnswer(answer, salt) {
-  return sha256Hex(`${salt}::${String(answer).trim().toLowerCase()}`);
+// Passwords are short numeric PINs: 4 to 6 digits.
+export const PASSWORD_RULE = '4 to 6 digits';
+export function isValidPassword(password) {
+  return /^\d{4,6}$/.test(String(password || ''));
 }
 
-export const SECURITY_QUESTIONS = [
-  'What was the name of your first pet?',
-  'What city were you born in?',
-  "What is your mother's maiden name?",
-  'What was the name of your first school?',
-  'What is your favourite book?',
-  'What was your childhood nickname?',
-];
+export const ROLES = { OWNER: 'owner', MEMBER: 'member' };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Data model
@@ -334,44 +332,64 @@ export async function getUser(username) {
   return data || null;
 }
 
-// Most recent updated_at across the whole table — team-wide data freshness,
-// independent of the current session's own save. Null if the table is empty.
+// Most recent change to the shared dataset — team-wide data freshness,
+// independent of the current session's own save. Null if not yet seeded.
 export async function getLastUpdated() {
   requireClient();
   const { data, error } = await supabase
-    .from(TABLE)
+    .from(SHARED)
     .select('updated_at')
-    .order('updated_at', { ascending: false })
-    .limit(1)
+    .eq('id', SHARED_ID)
     .maybeSingle();
   if (error) throw error;
   return data?.updated_at || null;
 }
 
-// First-login registration: creates the row with hashed credentials.
-export async function createUser({
-  username,
-  password,
-  securityQuestion,
-  securityAnswer,
-  displayName,
-  initialYear,
-}) {
+// Verifies a password against a stored account row. Returns boolean.
+export async function verifyPassword(row, password) {
+  const hash = await hashPassword(password, row.salt);
+  return hash === row.password_hash;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Shared dataset — one team-wide metrics blob every account reads/writes.
+// ─────────────────────────────────────────────────────────────────────────────
+export async function loadSharedData() {
+  requireClient();
+  const { data, error } = await supabase
+    .from(SHARED)
+    .select('data')
+    .eq('id', SHARED_ID)
+    .maybeSingle();
+  if (error) throw error;
+  return data?.data || null;
+}
+
+// Persists the shared metrics JSON blob (owners only — enforced in the UI).
+export async function saveData(blob) {
+  requireClient();
+  const { error } = await supabase
+    .from(SHARED)
+    .update({ data: blob })
+    .eq('id', SHARED_ID);
+  if (error) throw error;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Accounts — credentials + role on top of the shared data.
+// ─────────────────────────────────────────────────────────────────────────────
+// Owner-created account. No self-signup, no security question.
+export async function createAccount({ username, password, displayName, role }) {
   requireClient();
   const uname = normaliseUsername(username);
   const salt = generateSalt();
-  const [password_hash, security_answer_hash] = await Promise.all([
-    hashPassword(password, salt),
-    hashSecurityAnswer(securityAnswer, salt),
-  ]);
+  const password_hash = await hashPassword(password, salt);
   const row = {
     username: uname,
-    display_name: displayName || username,
+    display_name: displayName?.trim() || uname,
     password_hash,
     salt,
-    security_question: securityQuestion,
-    security_answer_hash,
-    data: emptyData(initialYear),
+    role: role === ROLES.OWNER ? ROLES.OWNER : ROLES.MEMBER,
   };
   const { data, error } = await supabase
     .from(TABLE)
@@ -382,25 +400,31 @@ export async function createUser({
   return data;
 }
 
-// Verifies a password against a stored row. Returns boolean.
-export async function verifyPassword(row, password) {
-  const hash = await hashPassword(password, row.salt);
-  return hash === row.password_hash;
+// Every account with its role, oldest first (used by the owner Team panel).
+export async function listAccounts() {
+  requireClient();
+  const { data, error } = await supabase
+    .from(TABLE)
+    .select('username, display_name, role, created_at')
+    .order('created_at', { ascending: true });
+  if (error) throw error;
+  return data || [];
 }
 
-export async function verifySecurityAnswer(row, answer) {
-  const hash = await hashSecurityAnswer(answer, row.salt);
-  return hash === row.security_answer_hash;
-}
-
-// Persists the metrics JSON blob for a user.
-export async function saveData(username, data) {
+export async function setAccountRole(username, role) {
   requireClient();
   const uname = normaliseUsername(username);
   const { error } = await supabase
     .from(TABLE)
-    .update({ data })
+    .update({ role: role === ROLES.OWNER ? ROLES.OWNER : ROLES.MEMBER })
     .eq('username', uname);
+  if (error) throw error;
+}
+
+export async function removeAccount(username) {
+  requireClient();
+  const uname = normaliseUsername(username);
+  const { error } = await supabase.from(TABLE).delete().eq('username', uname);
   if (error) throw error;
 }
 
@@ -424,17 +448,5 @@ export async function changePassword(username, newPassword) {
     .from(TABLE)
     .update({ salt, password_hash })
     .eq('username', uname);
-  if (error) throw error;
-}
-
-// Forgot-password reset (caller verifies the security answer first).
-export async function resetPassword(username, newPassword) {
-  return changePassword(username, newPassword);
-}
-
-export async function deleteAccount(username) {
-  requireClient();
-  const uname = normaliseUsername(username);
-  const { error } = await supabase.from(TABLE).delete().eq('username', uname);
   if (error) throw error;
 }
