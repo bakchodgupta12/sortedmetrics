@@ -94,9 +94,10 @@ export function safeDiv(numerator, denominator) {
   return numerator / denominator;
 }
 
-// Compact money for the narrow monthly grid (e.g. $70.8k, $1.7m) so values
-// never truncate or collide. Full precision stays in the wide tables and while
-// editing. Sub-$1k shows cents.
+// Abbreviated money for the monthly grid and large-money columns (e.g. $403.2k,
+// $1.2m, $412). One rule for every cell in a row so figures never mix
+// abbreviated with full precision (which caused clipping/overlap). Full
+// precision stays in the wide detail tables and while editing.
 export function compactMoney(v) {
   if (!isNum(v)) return DASH;
   const a = Math.abs(v);
@@ -105,7 +106,7 @@ export function compactMoney(v) {
   if (a >= 1e9) return `${s}$${c(a / 1e9)}b`;
   if (a >= 1e6) return `${s}$${c(a / 1e6)}m`;
   if (a >= 1e3) return `${s}$${c(a / 1e3)}k`;
-  return `${s}$${a % 1 === 0 ? a.toFixed(0) : a.toFixed(2)}`;
+  return `${s}$${Math.round(a)}`;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1402,7 +1403,7 @@ function heatCell(reportedNums, v) {
   return { background: `rgba(0,17,168,${a.toFixed(2)})`, color: a > 0.42 ? '#ffffff' : CURRENT_TEXT };
 }
 
-function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaunchCols = 0, preLaunchLabel = 'Pre-launch' }) {
+function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaunchCols = 0, preLaunchLabel = 'Pre-launch', tintCalc = true }) {
   const latest = latestMonthIndex(yearData);
   // Leading months that pre-date the programme launch sit under a neutral-grey
   // "pre-launch" band; months after the latest reported one sit under the
@@ -1460,21 +1461,22 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
           borderCollapse: 'collapse',
           width: '100%',
           tableLayout: 'fixed',
-          minWidth: 1080,
+          minWidth: 1244,
+          fontVariantNumeric: 'tabular-nums',
         }}
       >
         {/* Explicit column widths so inputs shrink to the column (fixed layout)
             and the header's "Upcoming" colspan lines up with the month cells.
-            Metric is capped ~188px and the Trend sparkline is left-aligned so it
-            sits beside the row names; the summary column is kept snug so it
-            doesn't leave a gap after December. */}
+            Month columns are ~74px so abbreviated money never clips; Metric is
+            capped, the Trend sparkline is left-aligned beside the row names, and
+            the summary column is kept snug. */}
         <colgroup>
           <col style={{ width: 188 }} />
           <col style={{ width: 74 }} />
           {MONTHS.map((m) => (
-            <col key={m} style={{ width: 62 }} />
+            <col key={m} style={{ width: 74 }} />
           ))}
-          <col style={{ width: 76 }} />
+          <col style={{ width: 80 }} />
         </colgroup>
         <thead>
           <tr style={{ borderBottom: `1px solid ${C.border}` }}>
@@ -1753,10 +1755,11 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
               );
             }
 
-            // calc row — total/subtotal styling: light brand-blue tint + bold.
+            // calc row — bold (and tinted only where `tintCalc`, to avoid a
+            // scattered/random look on tables whose computed rows aren't totals).
             const heatNums = row.heat ? sparkValues(row.values).filter(isNum) : null;
             return (
-              <tr key={`c${ri}`} style={{ background: CALC_ROW_BG }}>
+              <tr key={`c${ri}`} style={{ background: tintCalc ? CALC_ROW_BG : undefined }}>
                 <td
                   style={{
                     textAlign: 'left',
@@ -1766,7 +1769,7 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
                     lineHeight: 1.25,
                     position: 'sticky',
                     left: 0,
-                    background: CALC_LABEL_BG,
+                    background: tintCalc ? CALC_LABEL_BG : C.card,
                     zIndex: 1,
                   }}
                 >
@@ -2660,15 +2663,18 @@ function CardsMonthlyView({ yearData, updateMetric, allYears, activeYear }) {
   // Card-channel cost, acquisition and profitability.
   const costOfSales = diffSeries(cardsVolume, fundsCollected);
   const cacPerUser = ratioSeries(costOfSales, uniqueUsers);
-  const netRevenue = diffSeries(grossRevenue, costOfSales);
+  // Net Revenue only means something once Gross Revenue is entered for the
+  // month — a net built from a missing gross is misleading, so blank it.
+  const netRevenue = IDX.map((i) =>
+    grossRevenue[i] == null ? null : grossRevenue[i] - (costOfSales[i] || 0)
+  );
 
-  // YTD figures. Cost of Sales and Net Revenue sum; unique users can't be
-  // summed, so CAC has no meaningful YTD.
+  // YTD figures. Cost of Sales sums; Net Revenue sums the months that have a
+  // gross; unique users can't be summed, so CAC has no meaningful YTD.
   const volY = seriesSum(cardsVolume, latest);
   const fundsY = seriesSum(fundsCollected, latest);
-  const grossY = seriesSum(grossRevenue, latest);
   const costOfSalesY = volY == null && fundsY == null ? null : (volY || 0) - (fundsY || 0);
-  const netRevY = grossY == null && costOfSalesY == null ? null : (grossY || 0) - (costOfSalesY || 0);
+  const netRevY = seriesSum(netRevenue, latest);
 
   // Lifetime totals carry forward across years; each is a single figure (the
   // final value of the running total). Total Unique Users is a manual entry.
@@ -2764,6 +2770,7 @@ function CardsMonthlyView({ yearData, updateMetric, allYears, activeYear }) {
           updateMetric={updateMetric}
           preLaunchCols={preLaunchCols}
           preLaunchLabel={CARD_LAUNCH_LABEL}
+          tintCalc={false}
         />
         <SectionDivider />
         <LifetimeSummary
@@ -2934,6 +2941,8 @@ function CardsByCountryView({ batches, countryUsers, updateRoot }) {
   const pie = summaries
     .filter((s) => s.cards > 0)
     .map((s) => ({ name: s.country, value: s.cards, color: CARD_COUNTRY_COLOR[s.country] }));
+  const pieTotal = pie.reduce((a, p) => a + p.value, 0);
+  const ranked = [...pie].sort((a, b) => b.value - a.value);
 
   const head = (label, alignLeft) => (
     <th style={{ ...thBase, textAlign: alignLeft ? 'left' : 'right', padding: alignLeft ? '12px 16px' : '12px 12px' }}>
@@ -2956,7 +2965,7 @@ function CardsByCountryView({ batches, countryUsers, updateRoot }) {
           Card distribution and redemption totals for each country.
         </div>
         <div style={{ overflowX: 'auto', border: `1px solid ${CARD_BORDER}`, borderRadius: 16 }}>
-          <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 880 }}>
+          <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 880, fontVariantNumeric: 'tabular-nums' }}>
             <thead>
               <tr style={{ background: C.gray100 }}>
                 {head('Country', true)}
@@ -2982,15 +2991,23 @@ function CardsByCountryView({ batches, countryUsers, updateRoot }) {
                     {num(empty ? null : s.volume, 'usdt')}
                     {num(empty ? null : s.discounts, 'usdt')}
                     {num(empty ? null : s.avgDisc, 'percent2')}
-                    <td style={{ textAlign: 'right', padding: '4px 8px' }}>
-                      <Cell
-                        value={isNum(countryUsers[s.country]) ? countryUsers[s.country] : null}
-                        unit="count"
-                        onCommit={(v) => updateRoot('cardCountryUsers', { ...countryUsers, [s.country]: v })}
-                      />
-                    </td>
+                    {empty ? (
+                      // Not launched / no data → "—" in every column, including
+                      // the (otherwise manual) Unique Users figure.
+                      num(null, 'count')
+                    ) : (
+                      <td style={{ textAlign: 'right', padding: '4px 8px' }}>
+                        <Cell
+                          value={isNum(countryUsers[s.country]) ? countryUsers[s.country] : null}
+                          unit="count"
+                          onCommit={(v) => updateRoot('cardCountryUsers', { ...countryUsers, [s.country]: v })}
+                        />
+                      </td>
+                    )}
                     {num(empty ? null : s.cac, 'ratio')}
-                    {num(empty ? null : s.revenue, 'usdt')}
+                    {/* Revenue isn't wired yet (all 0) — show "—" until real
+                        revenue is entered, not a hard $0.00 that looks like data. */}
+                    {num(empty || !(s.revenue > 0) ? null : s.revenue, 'usdt')}
                   </tr>
                 );
               })}
@@ -3002,24 +3019,64 @@ function CardsByCountryView({ batches, countryUsers, updateRoot }) {
                 {num(totalAvgDisc, 'percent2', true)}
                 {num(total.anyUser ? total.users : null, 'count', true)}
                 {num(totalCac, 'ratio', true)}
-                {num(total.anyBatch ? total.revenue : null, 'usdt', true)}
+                {num(total.revenue > 0 ? total.revenue : null, 'usdt', true)}
               </tr>
             </tbody>
           </table>
         </div>
       </Card>
       {pie.length > 0 && (
-        <ChartCard title="Cards Sold by Country">
-          <PieChart>
-            <Pie data={pie} dataKey="value" nameKey="name" innerRadius={55} outerRadius={90} paddingAngle={2}>
-              {pie.map((m) => (
-                <RCell key={m.name} fill={m.color} />
+        <Card>
+          <h3 style={{ fontFamily: 'var(--font-head)', fontWeight: 600, fontSize: 16, margin: '0 0 14px' }}>
+            Cards Sold by Country
+          </h3>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 28, flexWrap: 'wrap' }}>
+            <div style={{ position: 'relative', width: 184, height: 184, flexShrink: 0 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie data={pie} dataKey="value" nameKey="name" innerRadius={62} outerRadius={88} paddingAngle={2} stroke="none">
+                    {pie.map((m) => (
+                      <RCell key={m.name} fill={m.color} />
+                    ))}
+                  </Pie>
+                  <Tooltip content={<ChartTooltip fmt={fmtNumber} />} />
+                </PieChart>
+              </ResponsiveContainer>
+              <div
+                style={{
+                  position: 'absolute',
+                  inset: 0,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  pointerEvents: 'none',
+                }}
+              >
+                <div style={{ fontFamily: 'var(--font-head)', fontWeight: 700, fontSize: 24, lineHeight: 1 }}>
+                  {fmtNumber(pieTotal)}
+                </div>
+                <div style={{ fontSize: 10, color: C.muted, textTransform: 'uppercase', letterSpacing: '0.05em', marginTop: 3 }}>
+                  Cards Sold
+                </div>
+              </div>
+            </div>
+            <div style={{ flex: 1, minWidth: 220, display: 'grid', gap: 10 }}>
+              {ranked.map((m) => (
+                <div key={m.name} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13 }}>
+                  <span style={{ width: 10, height: 10, borderRadius: 3, background: m.color, flexShrink: 0 }} />
+                  <span>{CARD_COUNTRY_FLAG[m.name]}</span>
+                  <span style={{ fontWeight: 500 }}>{m.name}</span>
+                  <span style={{ flex: 1 }} />
+                  <span style={{ fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{fmtNumber(m.value)}</span>
+                  <span style={{ color: C.muted, width: 52, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                    {((m.value / pieTotal) * 100).toFixed(1)}%
+                  </span>
+                </div>
               ))}
-            </Pie>
-            <Tooltip content={<ChartTooltip fmt={fmtNumber} />} />
-            <Legend wrapperStyle={{ fontSize: 11 }} itemSorter={null} />
-          </PieChart>
-        </ChartCard>
+            </div>
+          </div>
+        </Card>
       )}
     </div>
   );
@@ -3034,6 +3091,7 @@ function CardsBatchesView({ batches, countryUsers, updateRoot }) {
   const editable = useContext(EditableContext);
   const [filter, setFilter] = useState('All');
   const [page, setPage] = useState(0);
+  const [hoveredId, setHoveredId] = useState(null); // row hover reveals edit controls
 
   const setBatches = (next) => updateRoot('cardBatches', next);
   const updateBatch = (id, patch) => setBatches(batches.map((b) => (b.id === id ? { ...b, ...patch } : b)));
@@ -3096,8 +3154,21 @@ function CardsBatchesView({ batches, countryUsers, updateRoot }) {
     footer = [footerRow(`${filter} total`, filtered, isNum(countryUsers[filter]) ? countryUsers[filter] : null)];
   }
 
+  // Sticky header so the column labels stay visible while scrolling a long list.
   const head = (label, align = 'right') => (
-    <th style={{ ...thBase, textAlign: align, padding: align === 'left' ? '12px 14px' : '12px 8px' }}>{label}</th>
+    <th
+      style={{
+        ...thBase,
+        textAlign: align,
+        padding: align === 'left' ? '12px 14px' : '12px 8px',
+        position: 'sticky',
+        top: 0,
+        zIndex: 2,
+        background: C.gray100,
+      }}
+    >
+      {label}
+    </th>
   );
   const mCell = (b, key, unit) => (
     <td style={{ textAlign: 'right', padding: '4px 6px' }}>
@@ -3109,8 +3180,12 @@ function CardsBatchesView({ batches, countryUsers, updateRoot }) {
       {val == null ? DASH : fmtByUnit(val, unit)}
     </td>
   );
+  // Pinned (sticky-bottom) totals row — opaque background so rows don't show
+  // through while scrolling.
+  const FOOTER_BG = CALC_LABEL_BG;
+  const fStick = { position: 'sticky', bottom: 0, zIndex: 1, background: FOOTER_BG };
   const fCell = (val, unit) => (
-    <td style={{ textAlign: 'right', fontSize: 13, fontWeight: 700, padding: '10px 8px' }}>
+    <td style={{ ...fStick, textAlign: 'right', fontSize: 13, fontWeight: 700, padding: '10px 8px' }}>
       {val == null ? DASH : fmtByUnit(val, unit)}
     </td>
   );
@@ -3153,21 +3228,23 @@ function CardsBatchesView({ batches, countryUsers, updateRoot }) {
         </div>
       </div>
 
-      <div style={{ overflowX: 'auto', border: `1px solid ${CARD_BORDER}`, borderRadius: 16 }}>
-        <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 1040 }}>
+      <div style={{ overflow: 'auto', maxHeight: 520, border: `1px solid ${CARD_BORDER}`, borderRadius: 16 }}>
+        <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 1040, fontVariantNumeric: 'tabular-nums' }}>
           <thead>
-            <tr style={{ background: C.gray100 }}>
+            <tr>
               {head('Country', 'left')}
               {head('Batch')}
               {head('Cards')}
-              {head('Funds Sent')}
-              {head('Funds Received')}
+              {head('Cards Volume')}
+              {head('Funds Collected')}
               {head('Discounts & Fees')}
               {head('Avg Discount %')}
               {head('Unique Users')}
               {head('CAC')}
               {head('Revenue')}
-              {editable && <th style={{ ...thBase, width: 34, padding: '12px 6px' }} />}
+              {editable && (
+                <th style={{ ...thBase, width: 34, padding: '12px 6px', position: 'sticky', top: 0, zIndex: 2, background: C.gray100 }} />
+              )}
             </tr>
           </thead>
           <tbody>
@@ -3178,66 +3255,80 @@ function CardsBatchesView({ batches, countryUsers, updateRoot }) {
                 </td>
               </tr>
             ) : (
-              pageRows.map((b) => (
-                <tr key={b.id} style={{ borderTop: `1px solid ${C.gray200}` }}>
-                  <td style={{ textAlign: 'left', padding: '4px 14px', whiteSpace: 'nowrap' }}>
-                    {editable ? (
-                      <select
-                        value={b.country}
-                        onChange={(e) => changeCountry(b.id, e.target.value)}
-                        style={{
-                          fontFamily: 'inherit',
-                          fontSize: 13,
-                          color: C.text,
-                          background: 'transparent',
-                          border: 'none',
-                          borderBottom: `1px dashed ${C.gray300}`,
-                          padding: '4px 2px',
-                          outline: 'none',
-                          cursor: 'pointer',
-                        }}
-                      >
-                        {CARD_COUNTRIES.map((c) => (
-                          <option key={c} value={c}>
-                            {c}
-                          </option>
-                        ))}
-                      </select>
-                    ) : (
-                      <span style={{ fontSize: 13 }}>{b.country}</span>
-                    )}
-                  </td>
-                  {mCell(b, 'batchNo', 'count')}
-                  {mCell(b, 'cards', 'count')}
-                  {mCell(b, 'fundsSent', 'usdt')}
-                  {mCell(b, 'fundsReceived', 'usdt')}
-                  {cCell(batchDiscounts(b), 'usdt')}
-                  {cCell(batchAvgDisc(b), 'percent2')}
-                  {mCell(b, 'uniqueUsers', 'count')}
-                  {cCell(batchCac(b), 'ratio')}
-                  {mCell(b, 'revenue', 'usdt')}
-                  {editable && (
-                    <td style={{ textAlign: 'center', padding: '4px 6px' }}>
-                      <button
-                        type="button"
-                        onClick={() => removeBatch(b.id)}
-                        title="Remove batch"
-                        style={{ border: 'none', background: 'transparent', color: C.gray400, cursor: 'pointer', fontSize: 16, lineHeight: 1, padding: 2 }}
-                      >
-                        ×
-                      </button>
+              pageRows.map((b) => {
+                const showEdit = editable && hoveredId === b.id;
+                return (
+                  <tr
+                    key={b.id}
+                    style={{ borderTop: `1px solid ${C.gray200}` }}
+                    onMouseEnter={editable ? () => setHoveredId(b.id) : undefined}
+                    onMouseLeave={editable ? () => setHoveredId(null) : undefined}
+                  >
+                    <td style={{ textAlign: 'left', padding: '4px 14px', whiteSpace: 'nowrap' }}>
+                      {showEdit ? (
+                        // Edit affordance revealed on hover (Owners/Masters only).
+                        <select
+                          value={b.country}
+                          onChange={(e) => changeCountry(b.id, e.target.value)}
+                          style={{
+                            fontFamily: 'inherit',
+                            fontSize: 13,
+                            color: C.text,
+                            background: '#fff',
+                            border: `1px solid ${C.border}`,
+                            borderRadius: 6,
+                            padding: '3px 6px',
+                            outline: 'none',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          {CARD_COUNTRIES.map((c) => (
+                            <option key={c} value={c}>
+                              {c}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <span style={{ fontSize: 13 }}>
+                          <span style={{ marginRight: 7 }}>{CARD_COUNTRY_FLAG[b.country]}</span>
+                          {b.country}
+                        </span>
+                      )}
                     </td>
-                  )}
-                </tr>
-              ))
+                    {mCell(b, 'batchNo', 'count')}
+                    {mCell(b, 'cards', 'count')}
+                    {mCell(b, 'fundsSent', 'usdt')}
+                    {mCell(b, 'fundsReceived', 'usdt')}
+                    {cCell(batchDiscounts(b), 'usdt')}
+                    {cCell(batchAvgDisc(b), 'percent2')}
+                    {mCell(b, 'uniqueUsers', 'count')}
+                    {cCell(batchCac(b), 'ratio')}
+                    {mCell(b, 'revenue', 'usdt')}
+                    {editable && (
+                      <td style={{ textAlign: 'center', padding: '4px 6px' }}>
+                        {showEdit && (
+                          <button
+                            type="button"
+                            onClick={() => removeBatch(b.id)}
+                            title="Remove batch"
+                            style={{ border: 'none', background: 'transparent', color: C.gray400, cursor: 'pointer', fontSize: 16, lineHeight: 1, padding: 2 }}
+                          >
+                            ×
+                          </button>
+                        )}
+                      </td>
+                    )}
+                  </tr>
+                );
+              })
             )}
           </tbody>
           {footer.length > 0 && (
             <tfoot>
               {footer.map((f) => (
-                <tr key={f.label} style={{ borderTop: `1px solid ${C.border}`, background: CALC_ROW_BG }}>
-                  <td style={{ textAlign: 'left', fontSize: 13, fontWeight: 700, padding: '10px 14px', whiteSpace: 'nowrap' }}>{f.label}</td>
-                  <td />
+                <tr key={f.label} style={{ borderTop: `1px solid ${C.border}` }}>
+                  <td style={{ ...fStick, textAlign: 'left', fontSize: 13, fontWeight: 700, padding: '10px 14px', whiteSpace: 'nowrap' }}>{f.label}</td>
+                  <td style={fStick} />
                   {fCell(f.cards, 'count')}
                   {fCell(f.sent, 'usdt')}
                   {fCell(f.recv, 'usdt')}
@@ -3246,7 +3337,7 @@ function CardsBatchesView({ batches, countryUsers, updateRoot }) {
                   {fCell(f.users, 'count')}
                   {fCell(f.cac, 'ratio')}
                   {fCell(f.rev, 'usdt')}
-                  {editable && <td />}
+                  {editable && <td style={fStick} />}
                 </tr>
               ))}
             </tfoot>
