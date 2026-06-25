@@ -2411,6 +2411,7 @@ const SNAP_IDX = 0;
 // Top-up Cards countries (Tanzania launches Jul 1; shown from the start).
 const CARD_COUNTRIES = ['Kenya', 'Nigeria', 'Tanzania'];
 const CARD_COUNTRY_COLOR = { Kenya: PASTEL.lavender, Nigeria: PASTEL.blue, Tanzania: PASTEL.sand };
+const CARD_COUNTRY_FLAG = { Kenya: '🇰🇪', Nigeria: '🇳🇬', Tanzania: '🇹🇿' };
 
 const num0 = (v) => (isNum(v) ? v : 0);
 
@@ -2515,14 +2516,14 @@ function SubTabBar({ tabs, active, onChange }) {
 }
 
 function CardsTab({ yearData, updateMetric, allYears, activeYear, cardBatches, cardCountryUsers, updateRoot }) {
-  const [sub, setSub] = useState('Monthly');
+  const [sub, setSub] = useState('By Month');
   return (
     <div style={{ display: 'grid', gap: 16 }}>
       <Card>
         <TabTitle title="Top-up Cards" />
-        <SubTabBar tabs={['Monthly', 'By Country', 'Batches']} active={sub} onChange={setSub} />
+        <SubTabBar tabs={['By Month', 'By Country', 'By Batch']} active={sub} onChange={setSub} />
       </Card>
-      {sub === 'Monthly' && (
+      {sub === 'By Month' && (
         <CardsMonthlyView
           yearData={yearData}
           updateMetric={updateMetric}
@@ -2533,7 +2534,9 @@ function CardsTab({ yearData, updateMetric, allYears, activeYear, cardBatches, c
       {sub === 'By Country' && (
         <CardsByCountryView batches={cardBatches} countryUsers={cardCountryUsers} updateRoot={updateRoot} />
       )}
-      {sub === 'Batches' && <CardsBatchesView batches={cardBatches} updateRoot={updateRoot} />}
+      {sub === 'By Batch' && (
+        <CardsBatchesView batches={cardBatches} countryUsers={cardCountryUsers} updateRoot={updateRoot} />
+      )}
     </div>
   );
 }
@@ -2794,16 +2797,15 @@ function CardsByCountryView({ batches, countryUsers, updateRoot }) {
           By Country
         </div>
         <div style={{ fontSize: 12, color: C.muted, marginBottom: 12 }}>
-          Cumulative totals per country, summed automatically from the Batches log. Unique Users is a manual deduplicated figure per country.
+          Card distribution and redemption totals for each country.
         </div>
         <div style={{ overflowX: 'auto', border: `1px solid ${CARD_BORDER}`, borderRadius: 16 }}>
-          <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 920 }}>
+          <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 880 }}>
             <thead>
               <tr style={{ background: C.gray100 }}>
                 {head('Country', true)}
                 {head('Cards Sold')}
                 {head('Cards Volume')}
-                {head('Funds Collected')}
                 {head('Discounts & Fees')}
                 {head('Avg Discount %')}
                 {head('Unique Users')}
@@ -2817,11 +2819,11 @@ function CardsByCountryView({ batches, countryUsers, updateRoot }) {
                 return (
                   <tr key={s.country} style={{ borderTop: `1px solid ${C.gray200}` }}>
                     <td style={{ textAlign: 'left', fontSize: 13, fontWeight: 500, padding: '8px 16px', whiteSpace: 'nowrap' }}>
-                      <span style={{ color: CARD_COUNTRY_COLOR[s.country] }}>●</span> {s.country}
+                      <span style={{ marginRight: 7 }}>{CARD_COUNTRY_FLAG[s.country]}</span>
+                      {s.country}
                     </td>
                     {num(empty ? null : s.cards, 'count')}
                     {num(empty ? null : s.volume, 'usdt')}
-                    {num(empty ? null : s.collected, 'usdt')}
                     {num(empty ? null : s.discounts, 'usdt')}
                     {num(empty ? null : s.avgDisc, 'percent2')}
                     <td style={{ textAlign: 'right', padding: '4px 8px' }}>
@@ -2840,7 +2842,6 @@ function CardsByCountryView({ batches, countryUsers, updateRoot }) {
                 <td style={{ textAlign: 'left', fontSize: 13, fontWeight: 700, padding: '12px 16px' }}>Total</td>
                 {num(total.anyBatch ? total.cards : null, 'count', true)}
                 {num(total.anyBatch ? total.volume : null, 'usdt', true)}
-                {num(total.anyBatch ? total.collected : null, 'usdt', true)}
                 {num(total.anyBatch ? total.discounts : null, 'usdt', true)}
                 {num(totalAvgDisc, 'percent2', true)}
                 {num(total.anyUser ? total.users : null, 'count', true)}
@@ -2873,7 +2874,7 @@ function CardsByCountryView({ batches, countryUsers, updateRoot }) {
 // reflect every batch (computed from the full set), not just the visible page.
 const BATCH_PAGE_SIZE = 25;
 
-function CardsBatchesView({ batches, updateRoot }) {
+function CardsBatchesView({ batches, countryUsers, updateRoot }) {
   const editable = useContext(EditableContext);
   const [filter, setFilter] = useState('All');
   const [page, setPage] = useState(0);
@@ -2921,11 +2922,23 @@ function CardsBatchesView({ batches, updateRoot }) {
   const start = safePage * BATCH_PAGE_SIZE;
   const pageRows = filtered.slice(start, start + BATCH_PAGE_SIZE);
 
-  // Footer subtotal/total rows — computed across ALL batches, not just the page.
-  const subCountries =
-    filter === 'All' ? CARD_COUNTRIES.filter((c) => batches.some((b) => b.country === c)) : [filter];
-  const footer = subCountries.map((c) => ({ label: `${c} total`, ...batchSubtotal(batches.filter((b) => b.country === c)) }));
-  const showGrand = filter === 'All' && subCountries.length > 1;
+  // Footer total row — computed across ALL batches for the current filter (not
+  // just the page). Unique Users / CAC come from the manual per-country dedup
+  // figures entered on the By Country tab (batch unique-users do NOT roll up).
+  const footerRow = (label, bs, users) => {
+    const st = batchSubtotal(bs);
+    return { label, ...st, users, cac: users != null && users !== 0 ? st.disc / users : null };
+  };
+  let footer = [];
+  if (filter === 'All') {
+    if (batches.length > 0) {
+      const anyUser = CARD_COUNTRIES.some((c) => isNum(countryUsers[c]));
+      const usersSum = CARD_COUNTRIES.reduce((a, c) => a + (isNum(countryUsers[c]) ? countryUsers[c] : 0), 0);
+      footer = [footerRow('All countries', batches, anyUser ? usersSum : null)];
+    }
+  } else if (filtered.length > 0) {
+    footer = [footerRow(`${filter} total`, filtered, isNum(countryUsers[filter]) ? countryUsers[filter] : null)];
+  }
 
   const head = (label, align = 'right') => (
     <th style={{ ...thBase, textAlign: align, padding: align === 'left' ? '12px 14px' : '12px 8px' }}>{label}</th>
@@ -3038,7 +3051,7 @@ function CardsBatchesView({ batches, updateRoot }) {
                       <span style={{ fontSize: 13 }}>{b.country}</span>
                     )}
                   </td>
-                  <td style={{ textAlign: 'right', fontSize: 13, fontWeight: 600, padding: '4px 8px' }}>{b.batchNo}</td>
+                  {mCell(b, 'batchNo', 'count')}
                   {mCell(b, 'cards', 'count')}
                   {mCell(b, 'fundsSent', 'usdt')}
                   {mCell(b, 'fundsReceived', 'usdt')}
@@ -3063,44 +3076,23 @@ function CardsBatchesView({ batches, updateRoot }) {
               ))
             )}
           </tbody>
-          {footer.some((f) => f.count > 0) && (
+          {footer.length > 0 && (
             <tfoot>
-              {footer
-                .filter((f) => f.count > 0)
-                .map((f) => (
-                  <tr key={f.label} style={{ borderTop: `1px solid ${C.border}`, background: CALC_ROW_BG }}>
-                    <td style={{ textAlign: 'left', fontSize: 13, fontWeight: 700, padding: '10px 14px', whiteSpace: 'nowrap' }}>{f.label}</td>
-                    <td />
-                    {fCell(f.cards, 'count')}
-                    {fCell(f.sent, 'usdt')}
-                    {fCell(f.recv, 'usdt')}
-                    {fCell(f.disc, 'usdt')}
-                    {fCell(f.avg, 'percent2')}
-                    <td style={{ textAlign: 'right', fontSize: 13, color: C.gray400, padding: '10px 8px' }}>{DASH}</td>
-                    <td style={{ textAlign: 'right', fontSize: 13, color: C.gray400, padding: '10px 8px' }}>{DASH}</td>
-                    {fCell(f.rev, 'usdt')}
-                    {editable && <td />}
-                  </tr>
-                ))}
-              {showGrand &&
-                (() => {
-                  const g = batchSubtotal(batches);
-                  return (
-                    <tr style={{ borderTop: `1px solid ${C.border}`, background: CALC_ROW_BG }}>
-                      <td style={{ textAlign: 'left', fontSize: 13, fontWeight: 800, padding: '10px 14px' }}>All countries</td>
-                      <td />
-                      {fCell(g.cards, 'count')}
-                      {fCell(g.sent, 'usdt')}
-                      {fCell(g.recv, 'usdt')}
-                      {fCell(g.disc, 'usdt')}
-                      {fCell(g.avg, 'percent2')}
-                      <td style={{ textAlign: 'right', fontSize: 13, color: C.gray400, padding: '10px 8px' }}>{DASH}</td>
-                      <td style={{ textAlign: 'right', fontSize: 13, color: C.gray400, padding: '10px 8px' }}>{DASH}</td>
-                      {fCell(g.rev, 'usdt')}
-                      {editable && <td />}
-                    </tr>
-                  );
-                })()}
+              {footer.map((f) => (
+                <tr key={f.label} style={{ borderTop: `1px solid ${C.border}`, background: CALC_ROW_BG }}>
+                  <td style={{ textAlign: 'left', fontSize: 13, fontWeight: 700, padding: '10px 14px', whiteSpace: 'nowrap' }}>{f.label}</td>
+                  <td />
+                  {fCell(f.cards, 'count')}
+                  {fCell(f.sent, 'usdt')}
+                  {fCell(f.recv, 'usdt')}
+                  {fCell(f.disc, 'usdt')}
+                  {fCell(f.avg, 'percent2')}
+                  {fCell(f.users, 'count')}
+                  {fCell(f.cac, 'ratio')}
+                  {fCell(f.rev, 'usdt')}
+                  {editable && <td />}
+                </tr>
+              ))}
             </tfoot>
           )}
         </table>
