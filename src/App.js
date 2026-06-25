@@ -94,6 +94,20 @@ export function safeDiv(numerator, denominator) {
   return numerator / denominator;
 }
 
+// Compact money for the narrow monthly grid (e.g. $70.8k, $1.7m) so values
+// never truncate or collide. Full precision stays in the wide tables and while
+// editing. Sub-$1k shows cents.
+export function compactMoney(v) {
+  if (!isNum(v)) return DASH;
+  const a = Math.abs(v);
+  const s = v < 0 ? '-' : '';
+  const c = (n) => n.toFixed(1).replace(/\.0$/, '');
+  if (a >= 1e9) return `${s}$${c(a / 1e9)}b`;
+  if (a >= 1e6) return `${s}$${c(a / 1e6)}m`;
+  if (a >= 1e3) return `${s}$${c(a / 1e3)}k`;
+  return `${s}$${a % 1 === 0 ? a.toFixed(0) : a.toFixed(2)}`;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Shared styles
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1130,10 +1144,14 @@ function valueAt(s, i) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Editable cell + info tooltip
 // ─────────────────────────────────────────────────────────────────────────────
-function Cell({ value, unit, onCommit, inputStyle, placeholder = DASH }) {
+function Cell({ value, unit, onCommit, inputStyle, placeholder = DASH, compact = false }) {
   const editable = useContext(EditableContext);
   const [focused, setFocused] = useState(false);
   const [draft, setDraft] = useState('');
+
+  // Resting display: compact money in the narrow monthly grid, full elsewhere.
+  const fmtRest = (v) =>
+    compact && (unit === 'usd' || unit === 'usdt') ? compactMoney(v) : fmtByUnit(v, unit);
 
   // Read-only (Member) view: show the same figure, but as plain text — no
   // input, no focus affordance, not editable.
@@ -1149,7 +1167,7 @@ function Cell({ value, unit, onCommit, inputStyle, placeholder = DASH }) {
           ...inputStyle,
         }}
       >
-        {value == null ? placeholder : fmtByUnit(value, unit)}
+        {value == null ? placeholder : fmtRest(value)}
       </span>
     );
   }
@@ -1162,7 +1180,7 @@ function Cell({ value, unit, onCommit, inputStyle, placeholder = DASH }) {
       : draft
     : value == null
     ? ''
-    : fmtByUnit(value, unit);
+    : fmtRest(value);
 
   const commit = () => {
     const t = draft.trim().replace(/,/g, '');
@@ -1206,8 +1224,12 @@ function Cell({ value, unit, onCommit, inputStyle, placeholder = DASH }) {
       onKeyDown={(e) => {
         if (e.key === 'Enter') e.currentTarget.blur();
       }}
+      // size=1 + minWidth:0 stop the input's default ~20ch intrinsic width from
+      // ballooning its column in auto-layout tables (it still fills via width:100%).
+      size={1}
       style={{
         width: '100%',
+        minWidth: 0,
         textAlign: 'right',
         fontFamily: 'inherit',
         fontSize: 13,
@@ -1330,6 +1352,11 @@ const CALC_ROW_BG = 'rgba(0,17,168,0.045)';
 const CALC_LABEL_BG = '#f3f4fc'; // opaque ≈ CALC_ROW_BG over white (sticky col)
 const SPARK_DETAIL = '#8a93d8';
 const CURRENT_TEXT = '#16161f';
+// Pre-launch band — neutral grey (distinct from the brand-blue upcoming band),
+// for periods before a programme started.
+const PRELAUNCH_BAND = 'rgba(123,125,132,0.06)';
+const PRELAUNCH_DIVIDER = '#dcd9d2';
+const PRELAUNCH_LABEL = '#9a9aa4';
 const OVER_100_NOTE =
   'Over 100%: more new users than installs this month — a real artifact (e.g. registration backlog or multi-device sign-ups), not an error.';
 
@@ -1375,16 +1402,26 @@ function heatCell(reportedNums, v) {
   return { background: `rgba(0,17,168,${a.toFixed(2)})`, color: a > 0.42 ? '#ffffff' : CURRENT_TEXT };
 }
 
-function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD' }) {
+function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaunchCols = 0, preLaunchLabel = 'Pre-launch' }) {
   const latest = latestMonthIndex(yearData);
-  // Months after the latest reported one sit under the "Upcoming" band, with a
-  // divider at the boundary. Dynamic: as new months are filled, `latest`
-  // advances and the band shrinks.
-  const hasBand = latest >= 0 && latest < 11;
-  const futureCols = hasBand ? 11 - latest : 0;
-  const isFuture = (i) => latest >= 0 && i > latest;
-  const isCurrent = (i) => latest >= 0 && i === latest;
-  const firstFuture = (i) => hasBand && i === latest + 1;
+  // Leading months that pre-date the programme launch sit under a neutral-grey
+  // "pre-launch" band; months after the latest reported one sit under the
+  // brand-blue "Upcoming" band. Both are labelled, with a divider at each edge.
+  const P = Math.max(0, Math.min(12, preLaunchCols));
+  const isPre = (i) => i < P;
+  const isReported = (i) => i >= P && latest >= P && i <= latest;
+  const isFuture = (i) => i >= P && i > latest; // not-yet-reported live months
+  const isCurrent = (i) => latest >= P && i === latest;
+  const upcomingStart = Math.max(P, latest + 1);
+  const hasUpcoming = upcomingStart <= 11;
+  const upcomingCols = hasUpcoming ? 12 - upcomingStart : 0;
+  const cellBorderLeft = (i) => {
+    if (P > 0 && i === P) return `1px solid ${PRELAUNCH_DIVIDER}`;
+    if (hasUpcoming && i === upcomingStart && upcomingStart > P) return `1px solid ${UP_DIVIDER}`;
+    return undefined;
+  };
+  // Compact money in the narrow monthly grid so figures never truncate/collide.
+  const fmtMoney = (v, unit) => (unit === 'usd' || unit === 'usdt' ? compactMoney(v) : fmtByUnit(v, unit));
 
   const inputYtd = (key, mode) => {
     if (latest < 0 || mode === 'none') return null;
@@ -1396,6 +1433,14 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD' }) {
 
   // Sparkline drawn from the reported portion (Jan → latest) of a series.
   const sparkValues = (series) => (latest >= 0 ? series.slice(0, latest + 1) : series);
+  const summaryCell = {
+    textAlign: 'right',
+    padding: '9px 14px',
+    borderLeft: `1px solid ${C.border}`,
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+  };
   const summaryHead = {
     ...thBase,
     padding: '12px 14px',
@@ -1403,6 +1448,10 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD' }) {
     fontWeight: 700,
     borderLeft: `1px solid ${C.border}`,
   };
+  const numCellBase = { textAlign: 'right', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' };
+  const preCell = (i, key) => (
+    <td key={key} style={{ background: PRELAUNCH_BAND, borderLeft: cellBorderLeft(i) }} />
+  );
 
   return (
     <div style={{ overflowX: 'auto' }}>
@@ -1443,8 +1492,24 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD' }) {
               Metric
             </th>
             <th style={{ ...thBase, textAlign: 'left', padding: '12px 8px 12px 0' }}>Trend</th>
+            {P > 0 && (
+              <th
+                colSpan={P}
+                style={{
+                  ...thBase,
+                  textAlign: 'center',
+                  color: PRELAUNCH_LABEL,
+                  background: PRELAUNCH_BAND,
+                  borderRight: `1px solid ${PRELAUNCH_DIVIDER}`,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                }}
+              >
+                {preLaunchLabel}
+              </th>
+            )}
             {MONTHS.map((m, i) =>
-              hasBand && i > latest ? null : (
+              isReported(i) ? (
                 <th
                   key={m}
                   style={{
@@ -1455,11 +1520,11 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD' }) {
                 >
                   {m}
                 </th>
-              )
+              ) : null
             )}
-            {hasBand && (
+            {hasUpcoming && (
               <th
-                colSpan={futureCols}
+                colSpan={upcomingCols}
                 style={{
                   ...thBase,
                   textAlign: 'center',
@@ -1470,7 +1535,7 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD' }) {
                   textOverflow: 'ellipsis',
                 }}
               >
-                {futureCols === 1 ? '▦ Upcoming' : `▦ Upcoming · ${MONTHS[latest + 1]} – Dec`}
+                {upcomingCols === 1 ? '▦ Upcoming' : `▦ Upcoming · ${MONTHS[upcomingStart]} – Dec`}
               </th>
             )}
             <th style={summaryHead}>{totalLabel}</th>
@@ -1543,8 +1608,10 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD' }) {
                       <Sparkline values={sparkValues(series)} color={SPARK_DETAIL} />
                     </td>
                     {MONTHS.map((m, i) => {
+                      // Table-wide pre-launch band (e.g. before a programme started).
+                      if (isPre(i)) return preCell(i, m);
                       const cellVal = getVal(yearData, row.key, i);
-                      // Pre-launch months (store not yet live) with no data render
+                      // Per-row pre-launch (store not yet live) with no data renders
                       // as a faint en-dash — visually lighter than a genuine
                       // no-data em-dash, and never 0. A real value (should not
                       // exist pre-launch) is still shown so data is never hidden.
@@ -1590,7 +1657,7 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD' }) {
                               : launchTint
                               ? 'rgba(0,17,168,0.05)'
                               : undefined,
-                            borderLeft: firstFuture(i) ? `1px solid ${UP_DIVIDER}` : undefined,
+                            borderLeft: cellBorderLeft(i),
                           }}
                         >
                           <Cell
@@ -1599,17 +1666,16 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD' }) {
                             onCommit={(v) => updateMetric(row.key, m, v)}
                             inputStyle={inStyle}
                             placeholder={future ? '' : DASH}
+                            compact
                           />
                         </td>
                       );
                     })}
                     <td
                       style={{
-                        textAlign: 'right',
+                        ...summaryCell,
                         fontSize: 13,
                         fontWeight: 700,
-                        padding: '7px 14px',
-                        borderLeft: `1px solid ${C.border}`,
                         color: ytd == null ? C.gray400 : C.text,
                       }}
                     >
@@ -1617,7 +1683,7 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD' }) {
                         ? ''
                         : ytd == null
                         ? DASH
-                        : fmtByUnit(ytd, row.unit)}
+                        : fmtMoney(ytd, row.unit)}
                     </td>
                   </tr>
                 </React.Fragment>
@@ -1652,36 +1718,35 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD' }) {
                       <Sparkline values={sparkValues(row.values)} color={SPARK_DETAIL} />
                     </td>
                     {MONTHS.map((m, i) => {
+                      if (isPre(i)) return preCell(i, m);
                       const future = isFuture(i);
                       const v = row.values[i];
                       return (
                         <td
                           key={m}
                           style={{
-                            textAlign: 'right',
+                            ...numCellBase,
                             padding: '7px 8px',
                             fontSize: 13,
                             fontWeight: isCurrent(i) ? 600 : 400,
                             color: isCurrent(i) ? CURRENT_TEXT : C.muted,
                             background: future ? UP_BAND_DETAIL : undefined,
-                            borderLeft: firstFuture(i) ? `1px solid ${UP_DIVIDER}` : undefined,
+                            borderLeft: cellBorderLeft(i),
                           }}
                         >
-                          {future ? '' : v == null ? DASH : fmtByUnit(v, row.unit)}
+                          {future ? '' : v == null ? DASH : fmtMoney(v, row.unit)}
                         </td>
                       );
                     })}
                     <td
                       style={{
-                        textAlign: 'right',
+                        ...summaryCell,
                         fontSize: 13,
                         fontWeight: 700,
-                        padding: '7px 14px',
-                        borderLeft: `1px solid ${C.border}`,
                         color: ytd == null ? C.gray400 : C.text,
                       }}
                     >
-                      {ytd == null ? DASH : fmtByUnit(ytd, row.unit)}
+                      {ytd == null ? DASH : fmtMoney(ytd, row.unit)}
                     </td>
                   </tr>
                 </React.Fragment>
@@ -1712,6 +1777,7 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD' }) {
                   <Sparkline values={sparkValues(row.values)} color={C.primary} strokeWidth={1.8} />
                 </td>
                 {row.values.map((v, i) => {
+                  if (isPre(i)) return preCell(i, i);
                   const future = isFuture(i);
                   const heat = !future && row.heat ? heatCell(heatNums, v) : null;
                   // A >100% conversion month is a real artifact (new users this
@@ -1734,7 +1800,7 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD' }) {
                       key={i}
                       title={over100 ? OVER_100_NOTE : undefined}
                       style={{
-                        textAlign: 'right',
+                        ...numCellBase,
                         fontSize: 13,
                         fontWeight: weight,
                         padding: '9px 8px',
@@ -1744,20 +1810,18 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD' }) {
                           : heat
                           ? heat.background
                           : undefined,
-                        borderLeft: firstFuture(i) ? `1px solid ${UP_DIVIDER}` : undefined,
+                        borderLeft: cellBorderLeft(i),
                       }}
                     >
-                      {future ? '' : v == null ? DASH : `${fmtByUnit(v, row.unit)}${over100 ? '*' : ''}`}
+                      {future ? '' : v == null ? DASH : `${fmtMoney(v, row.unit)}${over100 ? '*' : ''}`}
                     </td>
                   );
                 })}
                 <td
                   style={{
-                    textAlign: 'right',
+                    ...summaryCell,
                     fontSize: 13,
                     fontWeight: 800,
-                    padding: '9px 14px',
-                    borderLeft: `1px solid ${C.border}`,
                     color:
                       row.negRed && isNum(row.ytd) && row.ytd < 0
                         ? C.red
@@ -1770,7 +1834,7 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD' }) {
                     ? ''
                     : row.ytd == null
                     ? DASH
-                    : fmtByUnit(row.ytd, row.unit)}
+                    : fmtMoney(row.ytd, row.unit)}
                 </td>
               </tr>
             );
@@ -1851,19 +1915,6 @@ const monthChartData = (seriesMap) =>
   IDX.map((i) => {
     const row = { m: MONTHS[i] };
     for (const [name, s] of Object.entries(seriesMap)) row[name] = s[i];
-    return row;
-  });
-
-// Like monthChartData, but splits each series into a solid part (through the
-// latest reported month) and a faded dashed "projection" part (`<name>__up`)
-// that holds the last reported value flat across the upcoming months.
-const monthChartDataSplit = (seriesMap, reported) =>
-  IDX.map((i) => {
-    const row = { m: MONTHS[i] };
-    for (const [name, s] of Object.entries(seriesMap)) {
-      row[name] = reported < 0 || i <= reported ? s[i] : null;
-      row[`${name}__up`] = reported >= 0 && i >= reported ? s[reported] : null;
-    }
     return row;
   });
 
@@ -2413,6 +2464,61 @@ const CARD_COUNTRIES = ['Kenya', 'Nigeria', 'Tanzania'];
 const CARD_COUNTRY_COLOR = { Kenya: PASTEL.lavender, Nigeria: PASTEL.blue, Tanzania: PASTEL.sand };
 const CARD_COUNTRY_FLAG = { Kenya: '🇰🇪', Nigeria: '🇳🇬', Tanzania: '🇹🇿' };
 
+// The top-up card programme launched September 2025 — a fixed boundary (not data
+// driven). Periods before it render as a "pre-launch" band, never blank dashes.
+const CARD_LAUNCH_YEAR = 2025;
+const CARD_LAUNCH_MONTH = 8; // Sep, 0-based
+const CARD_LAUNCH_LABEL = 'Programme launched Sep 2025';
+
+// How many leading months of `activeYear` pre-date the launch (0, the launch
+// month, or the whole year).
+function cardPreLaunchCols(activeYear) {
+  if (activeYear < CARD_LAUNCH_YEAR) return 12;
+  if (activeYear === CARD_LAUNCH_YEAR) return CARD_LAUNCH_MONTH;
+  return 0;
+}
+
+// Chart band marking pre-launch months grey (mirrors upcomingRefs for the
+// upcoming band). Returns recharts children, or null when nothing is pre-launch.
+function preLaunchRefs(P) {
+  if (!P || P <= 0) return null;
+  const refs = [
+    <ReferenceArea
+      key="pre-band"
+      x1={MONTHS[0]}
+      x2={MONTHS[Math.min(P, 12) - 1]}
+      fill={PRELAUNCH_BAND}
+      stroke="none"
+      label={{ value: 'Pre-launch', position: 'insideTopLeft', fontSize: 11, fill: PRELAUNCH_LABEL }}
+    />,
+  ];
+  if (P < 12) refs.push(<ReferenceLine key="pre-div" x={MONTHS[P]} stroke={PRELAUNCH_DIVIDER} strokeWidth={1} />);
+  return refs;
+}
+
+// Tooltip for the Cards activity chart: Cards Sold as a count, Cards / User as a
+// 2dp ratio; "Not yet reported" over the upcoming band.
+function CardsActivityTooltip({ active, payload, label, reported }) {
+  if (!active || !payload || !payload.length) return null;
+  const i = MONTHS.indexOf(label);
+  const upcoming = reported != null && reported >= 0 && i > reported;
+  const rows = payload.filter((p) => !String(p.dataKey).endsWith('__up'));
+  return (
+    <div style={{ background: '#fff', border: `1px solid ${C.border}`, borderRadius: 10, padding: '8px 10px', boxShadow: '0 4px 14px rgba(0,0,0,0.06)', fontSize: 12 }}>
+      <div style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
+      {upcoming ? (
+        <div style={{ color: C.muted }}>Not yet reported</div>
+      ) : (
+        rows.map((p) => (
+          <div key={p.dataKey} style={{ color: p.color || p.stroke }}>
+            {p.name}: {p.value == null ? DASH : p.dataKey === 'Cards / User' ? p.value.toFixed(2) : fmtNumber(p.value)}
+          </div>
+        ))
+      )}
+    </div>
+  );
+}
+
 const num0 = (v) => (isNum(v) ? v : 0);
 
 // ── Batch computed fields (a batch is identified by Country + Batch number) ──
@@ -2634,12 +2740,31 @@ function CardsMonthlyView({ yearData, updateMetric, allYears, activeYear }) {
     },
   ];
 
-  const activityChart = monthChartDataSplit({ 'Cards Sold': sold, 'Unique Users': uniqueUsers }, latest);
+  const preLaunchCols = cardPreLaunchCols(activeYear);
+  const hasLiveData = latest >= preLaunchCols; // any reported month this year
+
+  // Cards per Unique User — the meaningful signal (each user buying more cards
+  // over time). Shown as a subordinate right-axis line alongside Cards Sold bars.
+  const cardsPerUser = ratioSeries(sold, uniqueUsers);
+  const liveReported = (i) => i >= preLaunchCols && i <= latest;
+  const chartData = IDX.map((i) => ({
+    m: MONTHS[i],
+    'Cards Sold': liveReported(i) ? sold[i] : null,
+    'Cards / User': liveReported(i) ? cardsPerUser[i] : null,
+    'Cards / User__up': hasLiveData && i >= latest ? cardsPerUser[latest] : null,
+  }));
+  const latestRatio = hasLiveData ? cardsPerUser[latest] : null;
 
   return (
     <div style={{ display: 'grid', gap: 16 }}>
       <Card>
-        <MetricTable yearData={yearData} rows={rows} updateMetric={updateMetric} />
+        <MetricTable
+          yearData={yearData}
+          rows={rows}
+          updateMetric={updateMetric}
+          preLaunchCols={preLaunchCols}
+          preLaunchLabel={CARD_LAUNCH_LABEL}
+        />
         <SectionDivider />
         <LifetimeSummary
           calculated={[
@@ -2654,31 +2779,62 @@ function CardsMonthlyView({ yearData, updateMetric, allYears, activeYear }) {
           }}
         />
       </Card>
-      <ChartCard title="Cards Sold & Unique Users">
-        <ComposedChart data={activityChart} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
-          {upcomingRefs(latest)}
-          <CartesianGrid {...GRID} />
-          <XAxis {...X_AXIS} />
-          <YAxis {...yAxis()} yAxisId="left" />
-          <YAxis {...yAxis({ orientation: 'right' })} yAxisId="right" />
-          <Tooltip content={<ChartTooltip fmt={fmtNumber} reported={latest} />} />
-          <Legend wrapperStyle={{ fontSize: 11 }} itemSorter={null} />
-          <Bar yAxisId="left" dataKey="Cards Sold" fill={PASTEL.lavender} barSize={18} radius={[4, 4, 0, 0]} />
-          <Line yAxisId="right" type="monotone" dataKey="Unique Users" stroke={PASTEL.blue} strokeWidth={2} dot={false} connectNulls />
-          <Line
-            yAxisId="right"
-            type="monotone"
-            dataKey="Unique Users__up"
-            stroke={PASTEL.blue}
-            strokeOpacity={0.4}
-            strokeWidth={2}
-            strokeDasharray="6 6"
-            dot={false}
-            connectNulls
-            legendType="none"
-          />
-        </ComposedChart>
-      </ChartCard>
+      <Card style={{ paddingBottom: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
+          <div>
+            <h3 style={{ fontFamily: 'var(--font-head)', fontWeight: 600, fontSize: 16, margin: 0 }}>Cards Sold &amp; Cards per User</h3>
+            <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>
+              {latestRatio == null
+                ? 'Monthly cards sold, with cards per unique user.'
+                : `Each user now buys ${latestRatio.toFixed(1)} cards on average — up over time.`}
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 14, fontSize: 11.5, color: C.muted }}>
+            <span><span style={{ color: PASTEL.lavender }}>●</span> Cards Sold</span>
+            <span><span style={{ color: PASTEL.blue }}>●</span> Cards / User</span>
+          </div>
+        </div>
+        {hasLiveData ? (
+          <ResponsiveContainer width="100%" height={240}>
+            <ComposedChart data={chartData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+              {preLaunchRefs(preLaunchCols)}
+              {upcomingRefs(latest)}
+              <CartesianGrid {...GRID} />
+              <XAxis {...X_AXIS} />
+              <YAxis {...yAxis()} yAxisId="left" />
+              <YAxis
+                yAxisId="right"
+                orientation="right"
+                tickLine={false}
+                axisLine={false}
+                width={36}
+                tick={{ fontSize: 11, fill: C.muted }}
+                tickFormatter={(v) => v.toFixed(1)}
+                domain={[0, (max) => Math.max(1, Math.ceil(max))]}
+              />
+              <Tooltip content={<CardsActivityTooltip reported={latest} />} />
+              <Bar yAxisId="left" dataKey="Cards Sold" fill={PASTEL.lavender} barSize={18} radius={[4, 4, 0, 0]} />
+              <Line yAxisId="right" type="monotone" dataKey="Cards / User" stroke={PASTEL.blue} strokeWidth={2} dot={{ r: 2.5, fill: PASTEL.blue, strokeWidth: 0 }} connectNulls />
+              <Line
+                yAxisId="right"
+                type="monotone"
+                dataKey="Cards / User__up"
+                stroke={PASTEL.blue}
+                strokeOpacity={0.4}
+                strokeWidth={2}
+                strokeDasharray="6 6"
+                dot={false}
+                connectNulls
+                legendType="none"
+              />
+            </ComposedChart>
+          </ResponsiveContainer>
+        ) : (
+          <div style={{ height: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.muted, fontSize: 13 }}>
+            {CARD_LAUNCH_LABEL}
+          </div>
+        )}
+      </Card>
     </div>
   );
 }
