@@ -3,7 +3,6 @@ import { createPortal } from 'react-dom';
 import {
   Area,
   Bar,
-  BarChart,
   CartesianGrid,
   Cell as RCell,
   ComposedChart,
@@ -149,14 +148,22 @@ const PASTEL = {
   gray: '#c4c7d0', // neutral "other"
 };
 
+// Card chrome (per the reference): plain border + a soft shell shadow, NO
+// coloured top edge. Used for every table/chart/KPI card across all tabs.
+const CARD_BORDER = '#ecece5';
+const CARD_SHADOW = '0 6px 30px rgba(20,20,40,0.07)';
+
 function Card({ accent, style, children }) {
+  // `accent` is accepted for call-site compatibility but no longer drawn — the
+  // blue top edge was removed; cards are a plain border + shell shadow only.
+  void accent;
   return (
     <div
       style={{
         background: C.card,
-        border: `1px solid ${C.border}`,
-        borderRadius: 14,
-        borderTop: accent ? `3px solid ${accent}` : `1px solid ${C.border}`,
+        border: `1px solid ${CARD_BORDER}`,
+        borderRadius: 16,
+        boxShadow: CARD_SHADOW,
         padding: 20,
         ...style,
       }}
@@ -1310,6 +1317,8 @@ const CALC_ROW_BG = 'rgba(0,17,168,0.045)';
 const CALC_LABEL_BG = '#f3f4fc'; // opaque ≈ CALC_ROW_BG over white (sticky col)
 const SPARK_DETAIL = '#8a93d8';
 const CURRENT_TEXT = '#16161f';
+const OVER_100_NOTE =
+  'Over 100%: more new users than installs this month — a real artifact (e.g. registration backlog or multi-device sign-ups), not an error.';
 
 // Per-row sparkline drawn from the reported portion of a series (~60px). Muted
 // blue for detail rows, solid brand blue (heavier) for total/subtotal rows.
@@ -1329,7 +1338,7 @@ function Sparkline({ values, color, strokeWidth = 1.6, width = 60, height = 21 }
     .filter(Boolean)
     .join(' ');
   return (
-    <svg width={width} height={height} style={{ display: 'block', margin: '0 auto' }} aria-hidden="true">
+    <svg width={width} height={height} style={{ display: 'block' }} aria-hidden="true">
       <polyline
         fill="none"
         stroke={color}
@@ -1394,12 +1403,12 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD' }) {
       >
         {/* Explicit column widths so inputs shrink to the column (fixed layout)
             and the header's "Upcoming" colspan lines up with the month cells.
-            The Trend column is wide with extra right padding so the sparklines
-            have breathing room from January; the summary column is kept snug so
-            it doesn't leave a gap after December. */}
+            Metric is capped ~188px and the Trend sparkline is left-aligned so it
+            sits beside the row names; the summary column is kept snug so it
+            doesn't leave a gap after December. */}
         <colgroup>
-          <col style={{ width: 170 }} />
-          <col style={{ width: 90 }} />
+          <col style={{ width: 188 }} />
+          <col style={{ width: 74 }} />
           {MONTHS.map((m) => (
             <col key={m} style={{ width: 62 }} />
           ))}
@@ -1420,7 +1429,7 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD' }) {
             >
               Metric
             </th>
-            <th style={{ ...thBase, textAlign: 'center', padding: '12px 20px 12px 6px' }}>Trend</th>
+            <th style={{ ...thBase, textAlign: 'left', padding: '12px 8px 12px 0' }}>Trend</th>
             {MONTHS.map((m, i) =>
               hasBand && i > latest ? null : (
                 <th
@@ -1501,21 +1510,40 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD' }) {
                         fontSize: 13,
                         fontWeight: 500,
                         padding: '7px 14px',
-                        whiteSpace: 'nowrap',
                         position: 'sticky',
                         left: 0,
                         background: C.card,
                         zIndex: 1,
                       }}
                     >
-                      {row.label}
-                      {row.info && <InfoTip text={row.info} />}
+                      <div style={{ lineHeight: 1.25 }}>
+                        {row.label}
+                        {row.info && <InfoTip text={row.info} />}
+                      </div>
+                      {row.sub && (
+                        <div style={{ fontSize: 10, color: '#a8a8b0', fontWeight: 500, marginTop: 2 }}>
+                          {row.sub}
+                        </div>
+                      )}
                     </td>
-                    <td style={{ padding: '4px 20px 4px 6px', textAlign: 'center' }}>
+                    <td style={{ padding: '4px 8px 4px 0', textAlign: 'left' }}>
                       <Sparkline values={sparkValues(series)} color={SPARK_DETAIL} />
                     </td>
                     {MONTHS.map((m, i) => {
                       const cellVal = getVal(yearData, row.key, i);
+                      // Pre-launch months (store not yet live) with no data render
+                      // as a faint en-dash — visually lighter than a genuine
+                      // no-data em-dash, and never 0. A real value (should not
+                      // exist pre-launch) is still shown so data is never hidden.
+                      const preLaunch =
+                        row.preLaunchUntil != null && i < row.preLaunchUntil && !isNum(cellVal);
+                      if (preLaunch) {
+                        return (
+                          <td key={m} style={{ textAlign: 'right', padding: '4px 6px', color: '#d4d4da' }}>
+                            –
+                          </td>
+                        );
+                      }
                       // Cross-tab drift check: flag (don't force) a mismatch
                       // against the linked metric on another tab for this month.
                       let mismatch = null;
@@ -1526,6 +1554,7 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD' }) {
                         }
                       }
                       const future = isFuture(i);
+                      const launchTint = row.launchIdx === i;
                       const heat = !future && row.heat ? heatCell(heatNums, cellVal) : null;
                       const inStyle = heat
                         ? { color: heat.color, fontWeight: 600 }
@@ -1545,6 +1574,8 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD' }) {
                               ? UP_BAND_DETAIL
                               : heat
                               ? heat.background
+                              : launchTint
+                              ? 'rgba(0,17,168,0.05)'
                               : undefined,
                             borderLeft: firstFuture(i) ? `1px solid ${UP_DIVIDER}` : undefined,
                           }}
@@ -1594,7 +1625,7 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD' }) {
                         fontSize: 13,
                         fontWeight: 500,
                         padding: '7px 14px',
-                        whiteSpace: 'nowrap',
+                        lineHeight: 1.25,
                         position: 'sticky',
                         left: 0,
                         background: C.card,
@@ -1604,7 +1635,7 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD' }) {
                       {row.label}
                       {row.info && <InfoTip text={row.info} />}
                     </td>
-                    <td style={{ padding: '4px 20px 4px 6px', textAlign: 'center' }}>
+                    <td style={{ padding: '4px 8px 4px 0', textAlign: 'left' }}>
                       <Sparkline values={sparkValues(row.values)} color={SPARK_DETAIL} />
                     </td>
                     {MONTHS.map((m, i) => {
@@ -1654,7 +1685,7 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD' }) {
                     fontSize: 13,
                     fontWeight: 700,
                     padding: '9px 14px',
-                    whiteSpace: 'nowrap',
+                    lineHeight: 1.25,
                     position: 'sticky',
                     left: 0,
                     background: CALC_LABEL_BG,
@@ -1664,12 +1695,16 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD' }) {
                   {row.label}
                   {row.formula && <InfoTip text={row.formula} />}
                 </td>
-                <td style={{ padding: '4px 20px 4px 6px', textAlign: 'center' }}>
+                <td style={{ padding: '4px 8px 4px 0', textAlign: 'left' }}>
                   <Sparkline values={sparkValues(row.values)} color={C.primary} strokeWidth={1.8} />
                 </td>
                 {row.values.map((v, i) => {
                   const future = isFuture(i);
                   const heat = !future && row.heat ? heatCell(heatNums, v) : null;
+                  // A >100% conversion month is a real artifact (new users this
+                  // month exceeded installs, e.g. backlog/multi-device) — flag it
+                  // with an asterisk + tooltip rather than letting it read as a bug.
+                  const over100 = row.flagOver100 && !future && isNum(v) && v > 100;
                   let color;
                   let weight = 600;
                   if (heat) {
@@ -1684,6 +1719,7 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD' }) {
                   return (
                     <td
                       key={i}
+                      title={over100 ? OVER_100_NOTE : undefined}
                       style={{
                         textAlign: 'right',
                         fontSize: 13,
@@ -1698,7 +1734,7 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD' }) {
                         borderLeft: firstFuture(i) ? `1px solid ${UP_DIVIDER}` : undefined,
                       }}
                     >
-                      {future ? '' : v == null ? DASH : fmtByUnit(v, row.unit)}
+                      {future ? '' : v == null ? DASH : `${fmtByUnit(v, row.unit)}${over100 ? '*' : ''}`}
                     </td>
                   );
                 })}
@@ -1865,12 +1901,25 @@ const TwoCol = ({ children }) => (
 // ─────────────────────────────────────────────────────────────────────────────
 // Installs & Users tab (internal keys keep the legacy "download" naming)
 // ─────────────────────────────────────────────────────────────────────────────
+// Store launch dates drive the "pre-launch" rendering in the Installs section:
+// months before a store went live show a faint en-dash (not 0 / not no-data),
+// and the launch month is tinted. y/m are zero-based calendar (m: 0 = Jan).
+const STORE_LAUNCH = {
+  dl_kaios: { y: 2023, m: 0, label: 'Live since 2023' },
+  dl_googlePlay: { y: 2025, m: 2, label: 'Launched Mar 2025' },
+  dl_palmStore: { y: 2025, m: 5, label: 'Launched Jun 2025' },
+  dl_indusStore: { y: 2025, m: 6, label: 'Launched Jul 2025' },
+  dl_vivoStore: { y: 2026, m: 3, label: 'Launched Apr 2026' },
+};
+
+// Intentional pastel palette for the store charts (NOT brand-mapped — chosen
+// for legibility across 5 series). Exact hexes per the design handoff.
 const STORE_KEYS = [
-  ['dl_kaios', 'KaiOS', PASTEL.blue],
-  ['dl_googlePlay', 'Google Play', PASTEL.mint],
-  ['dl_palmStore', 'Palm Store', PASTEL.sand],
-  ['dl_indusStore', 'Indus Store', PASTEL.lavender],
-  ['dl_vivoStore', 'Vivo Store', PASTEL.coral],
+  ['dl_kaios', 'KaiOS', '#9AA7F2'],
+  ['dl_googlePlay', 'Google Play', '#9BDBC0'],
+  ['dl_palmStore', 'Palm Store', '#F6CE8C'],
+  ['dl_indusStore', 'Indus Store', '#C9B0EC'],
+  ['dl_vivoStore', 'Vivo Store', '#F4A9A8'],
 ];
 
 function DownloadsTab({ yearData, updateMetric, allYears, activeYear }) {
@@ -1899,9 +1948,25 @@ function DownloadsTab({ yearData, updateMetric, allYears, activeYear }) {
   const lifeUsers =
     latest >= 0 ? valueAt(cumUsers, latest) : baseUsers > 0 ? baseUsers : null;
 
+  // Per-store pre-launch boundary for the active year: months before launch
+  // render as a faint en-dash (store wasn't live), the launch month is tinted.
+  const storeLaunchInfo = (key) => {
+    const L = STORE_LAUNCH[key];
+    if (!L) return { sub: undefined, preLaunchUntil: 0, launchIdx: -1 };
+    if (activeYear < L.y) return { sub: L.label, preLaunchUntil: 12, launchIdx: -1 };
+    if (activeYear > L.y) return { sub: L.label, preLaunchUntil: 0, launchIdx: -1 };
+    return { sub: L.label, preLaunchUntil: L.m, launchIdx: L.m };
+  };
+
   const rows = [
     { kind: 'subhead', label: 'Installs' },
-    ...STORE_KEYS.map(([key, label]) => ({ kind: 'input', key, label, unit: 'count' })),
+    ...STORE_KEYS.map(([key, label]) => ({
+      kind: 'input',
+      key,
+      label,
+      unit: 'count',
+      ...storeLaunchInfo(key),
+    })),
     calc('New Installs', 'count', newDownloads, ndY, 'Total app installs across all stores in the month.'),
     calc(
       'Total Installs',
@@ -1920,13 +1985,16 @@ function DownloadsTab({ yearData, updateMetric, allYears, activeYear }) {
       'Cumulative registered users since launch.'
     ),
     { kind: 'subhead', label: 'User Conversion Rate' },
-    calc(
-      'Monthly',
-      'percent2',
-      conversion,
-      pct(nuY, ndY),
-      'The rate at which new installs converted to users this month (new users this month ÷ new installs this month).'
-    ),
+    {
+      ...calc(
+        'Monthly',
+        'percent2',
+        conversion,
+        pct(nuY, ndY),
+        'The rate at which new installs converted to users this month (new users this month ÷ new installs this month).'
+      ),
+      flagOver100: true,
+    },
     calc(
       'Overall',
       'percent2',
@@ -1936,39 +2004,224 @@ function DownloadsTab({ yearData, updateMetric, allYears, activeYear }) {
     ),
   ];
 
-  // 100%-stacked share of new installs per store, by month. Share reads cleanly
-  // even when one store dominates a single month (e.g. an OEM pre-install spike).
-  const storeShareData = IDX.map((i) => {
-    const vals = STORE_KEYS.map(([key]) => getVal(yearData, key, i));
-    const total = vals.reduce((acc, v) => acc + (v || 0), 0);
-    const reported = latest >= 0 && i <= latest;
-    const row = { m: MONTHS[i] };
-    STORE_KEYS.forEach(([key, label], idx) => {
-      row[label] = reported && total > 0 ? ((vals[idx] || 0) / total) * 100 : null;
-    });
-    return row;
-  });
-
   return (
     <div style={{ display: 'grid', gap: 16 }}>
-      <Card accent={C.primary}>
-        <TabTitle title="Installs & Users" accent={C.blue} />
+      <Card>
+        <TabTitle title="Installs & Users" />
         <MetricTable yearData={yearData} rows={rows} updateMetric={updateMetric} />
       </Card>
-      <ChartCard title="Installs by Store" accent={C.blue}>
-        <BarChart data={storeShareData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
-          {upcomingRefs(latest)}
-          <CartesianGrid {...GRID} />
-          <XAxis {...X_AXIS} />
-          <YAxis {...yAxis({ domain: [0, 100], tickFormatter: (v) => `${v}%` })} />
-          <Tooltip content={<ChartTooltip fmt={fmtPercent} reported={latest} />} />
-          <Legend wrapperStyle={{ fontSize: 11 }} itemSorter={null} />
-          {STORE_KEYS.map(([key, label, color]) => (
-            <Bar key={label} dataKey={label} stackId="s" fill={color} maxBarSize={44} />
-          ))}
-        </BarChart>
-      </ChartCard>
+      <StoreInstallsChart yearData={yearData} latest={latest} />
     </div>
+  );
+}
+
+// Compact thousands label (69015 → "69k"); whole numbers under 1k as-is.
+function fmtK(n) {
+  return Math.abs(n) >= 1000 ? `${Math.round(n / 1000)}k` : `${Math.round(n)}`;
+}
+// Round up to a "nice" axis maximum so a 100% stack never floats to 100.0001%
+// and volume ticks land on clean numbers.
+function niceCeil(n) {
+  if (!isNum(n) || n <= 0) return 1;
+  const pow = Math.pow(10, Math.floor(Math.log10(n)));
+  const f = n / pow;
+  const nf = f <= 1 ? 1 : f <= 1.5 ? 1.5 : f <= 2 ? 2 : f <= 3 ? 3 : f <= 5 ? 5 : f <= 7.5 ? 7.5 : 10;
+  return nf * pow;
+}
+
+// "Installs by Store" — a div-based stacked bar with a Volume / Share toggle.
+// Volume: bar height = that month's real total installs (bars differ in height).
+// Share: 100%-stacked (every bar full height). Future months render as clean
+// empty "Upcoming" slots; reported bars end at the current month.
+function StoreInstallsChart({ yearData, latest }) {
+  const [mode, setMode] = useState('volume');
+  const stores = STORE_KEYS.map(([key, label, color]) => ({
+    key,
+    label,
+    color,
+    vals: rawSeries(yearData, key),
+  }));
+
+  // Per-month totals across stores (reported months only).
+  const totals = IDX.map((m) => {
+    if (latest < 0 || m > latest) return null;
+    let t = 0;
+    let any = false;
+    stores.forEach((s) => {
+      if (isNum(s.vals[m])) {
+        t += s.vals[m];
+        any = true;
+      }
+    });
+    return any ? t : 0;
+  });
+  const maxTotal = Math.max(1, ...totals.filter(isNum));
+  const axisMax = niceCeil(maxTotal);
+  const yTicks =
+    mode === 'share'
+      ? ['100%', '75%', '50%', '25%', '0']
+      : [fmtK(axisMax), fmtK(axisMax * 0.75), fmtK(axisMax * 0.5), fmtK(axisMax * 0.25), '0'];
+
+  const gridLine = (top) => (
+    <div
+      key={top}
+      style={{ position: 'absolute', left: 0, right: 0, top: `${top}%`, height: 1, background: top === 100 ? '#e5e1d8' : '#f0ede6' }}
+    />
+  );
+
+  let firstUpcoming = true;
+  const bars = IDX.map((m) => {
+    const isUpcoming = latest < 0 || m > latest;
+    const current = m === latest;
+    if (isUpcoming) {
+      const showLabel = firstUpcoming;
+      firstUpcoming = false;
+      return { m, current, upcoming: true, showLabel };
+    }
+    const total = totals[m] || 0;
+    const stackH = mode === 'share' ? (total > 0 ? 100 : 0) : (total / axisMax) * 100;
+    const segs = stores
+      .map((s) => {
+        const v = s.vals[m];
+        if (!isNum(v) || v <= 0 || total === 0) return null;
+        return { color: s.color, h: (v / total) * 100 };
+      })
+      .filter(Boolean);
+    return { m, current, upcoming: false, stackH, segs };
+  });
+
+  const toggleBtn = (m, label) => (
+    <div
+      key={m}
+      onClick={() => setMode(m)}
+      style={{
+        padding: '5px 13px',
+        borderRadius: 7,
+        fontSize: 11.5,
+        cursor: 'pointer',
+        fontWeight: mode === m ? 600 : 500,
+        background: mode === m ? C.primary : 'transparent',
+        color: mode === m ? '#fff' : C.muted,
+      }}
+    >
+      {label}
+    </div>
+  );
+
+  return (
+    <Card style={{ padding: '20px 24px' }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 18 }}>
+        <div>
+          <h3 style={{ fontFamily: 'var(--font-head)', fontWeight: 600, fontSize: 16, margin: 0 }}>
+            Installs by Store
+          </h3>
+          <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>
+            {mode === 'volume'
+              ? 'Total new installs per store, by month.'
+              : 'Share of new installs per store, by month (100% stacked).'}
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 4, background: '#f3f1ec', borderRadius: 9, padding: 3 }}>
+          {toggleBtn('volume', 'Volume')}
+          {toggleBtn('share', 'Share')}
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', gap: 12 }}>
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            justifyContent: 'space-between',
+            height: 200,
+            width: 36,
+            fontSize: 10,
+            color: '#b0b0ba',
+            textAlign: 'right',
+          }}
+        >
+          {yTicks.map((t, i) => (
+            <span key={i}>{t}</span>
+          ))}
+        </div>
+        <div style={{ flex: 1, position: 'relative', height: 200 }}>
+          {[0, 25, 50, 75, 100].map((t) => gridLine(t))}
+          <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'flex-end', gap: 10 }}>
+            {bars.map((bar) =>
+              bar.upcoming ? (
+                <div
+                  key={bar.m}
+                  style={{
+                    flex: 1,
+                    height: '100%',
+                    background: 'rgba(0,17,168,0.03)',
+                    border: '1px dashed #dedbf0',
+                    borderRadius: 5,
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    justifyContent: 'center',
+                    paddingTop: 10,
+                  }}
+                >
+                  {bar.showLabel && (
+                    <span
+                      style={{
+                        fontSize: 10,
+                        color: '#9aa0c0',
+                        fontWeight: 600,
+                        writingMode: 'vertical-rl',
+                        transform: 'rotate(180deg)',
+                      }}
+                    >
+                      Upcoming
+                    </span>
+                  )}
+                </div>
+              ) : (
+                <div
+                  key={bar.m}
+                  style={{ flex: 1, height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'flex-end' }}
+                >
+                  <div
+                    style={{
+                      width: '100%',
+                      height: `${bar.stackH.toFixed(2)}%`,
+                      display: 'flex',
+                      flexDirection: 'column-reverse',
+                      borderRadius: '5px 5px 0 0',
+                      overflow: 'hidden',
+                    }}
+                  >
+                    {bar.segs.map((seg, si) => (
+                      <div key={si} style={{ width: '100%', height: `${seg.h.toFixed(2)}%`, background: seg.color }} />
+                    ))}
+                  </div>
+                </div>
+              )
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', gap: 10, marginTop: 8, marginLeft: 48, fontSize: 10.5, color: '#a8a8b0' }}>
+        {bars.map((bar) => (
+          <span
+            key={bar.m}
+            style={{ flex: 1, textAlign: 'center', color: bar.current ? CURRENT_TEXT : undefined, fontWeight: bar.current ? 700 : undefined }}
+          >
+            {MONTHS[bar.m]}
+          </span>
+        ))}
+      </div>
+
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, marginTop: 16, marginLeft: 48, fontSize: 11.5, color: C.muted }}>
+        {STORE_KEYS.map(([key, label, color]) => (
+          <span key={key}>
+            <span style={{ color }}>●</span> {label}
+          </span>
+        ))}
+      </div>
+    </Card>
   );
 }
 
@@ -2226,7 +2479,13 @@ function CardsTab({ yearData, updateMetric, allYears, activeYear }) {
       info: 'The number of unique users who redeemed a top-up card this month.',
     },
     {
-      ...calc('CAC per Transacting User', 'ratio', cacPerUser, null, ''),
+      ...calc(
+        'CAC per Transacting User',
+        'ratio',
+        cacPerUser,
+        null,
+        'Customer acquisition cost per transacting card user this month. Calculated as Cost of Sales ÷ Unique Users.'
+      ),
       blankTotal: true,
     },
     {
@@ -2326,7 +2585,7 @@ function LifetimeSummary({ calculated, manual }) {
   const cellStyle = {
     flex: '1 1 0',
     minWidth: 160,
-    border: `1px solid ${C.border}`,
+    border: `1px solid ${CARD_BORDER}`,
     borderRadius: 14,
     padding: '18px 20px',
     background: C.card,
@@ -2465,7 +2724,7 @@ function MarketSummaryTable({ yearData, updateMetric }) {
       <div
         style={{
           overflowX: 'auto',
-          border: `1px solid ${C.border}`,
+          border: `1px solid ${CARD_BORDER}`,
           borderRadius: 16,
         }}
       >
@@ -2538,10 +2797,13 @@ function RevenueTab({ yearData, updateMetric }) {
   const totalRev = sumSeries(yearData, revKeys);
   const totalCost = sumSeries(yearData, costKeys);
   const netRev = diffSeries(totalRev, totalCost);
+  // Net margin = net revenue ÷ total revenue (monthly), as a percentage.
+  const netMargin = pctSeries(netRev, totalRev);
 
   const revY = seriesSum(totalRev, latest);
   const costY = seriesSum(totalCost, latest);
   const netRevY = revY == null && costY == null ? null : (revY || 0) - (costY || 0);
+  const netMarginY = pct(netRevY, revY);
 
   const rows = [
     { kind: 'subhead', label: 'Revenue' },
@@ -2564,6 +2826,11 @@ function RevenueTab({ yearData, updateMetric }) {
     { kind: 'subhead', label: 'Net Position' },
     {
       ...calc('Net Revenue', 'usd', netRev, netRevY, 'Revenue remaining after costs. Calculated as Total Revenue − Cost of Revenue.'),
+      negRed: true,
+    },
+    {
+      ...calc('Net Margin', 'percent', netMargin, netMarginY, 'Net revenue as a share of total revenue. Calculated as Net Revenue ÷ Total Revenue.'),
+      heat: true,
       negRed: true,
     },
   ];
@@ -2733,7 +3000,7 @@ function CampaignsTab({ yearData, updateYearField }) {
               key={k.key}
               style={{
                 background: C.card,
-                border: `1px solid ${C.border}`,
+                border: `1px solid ${CARD_BORDER}`,
                 borderRadius: 14,
                 padding: '16px 18px',
               }}
@@ -2999,7 +3266,7 @@ function HeroMetric({ label, value, delta, compare, divider }) {
 // Secondary metric: smaller card, value + inline delta token.
 function StatCard({ label, value, delta }) {
   return (
-    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: '15px 18px' }}>
+    <div style={{ background: C.card, border: `1px solid ${CARD_BORDER}`, borderRadius: 14, boxShadow: CARD_SHADOW, padding: '15px 18px' }}>
       <div style={{ ...DASH_KPI_LABEL, fontSize: 10.5, letterSpacing: '0.5px' }}>{label}</div>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 6 }}>
         <span
@@ -3451,8 +3718,9 @@ function DashboardTab({ allYears }) {
       <div
         style={{
           background: C.card,
-          border: `1px solid ${C.border}`,
+          border: `1px solid ${CARD_BORDER}`,
           borderRadius: 18,
+          boxShadow: CARD_SHADOW,
           overflow: 'hidden',
           display: 'grid',
           gridTemplateColumns: 'repeat(3, 1fr)',
@@ -3471,7 +3739,7 @@ function DashboardTab({ allYears }) {
       </div>
 
       {/* Combined trend chart — anchors the page */}
-      <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 18, padding: '20px 24px' }}>
+      <div style={{ background: C.card, border: `1px solid ${CARD_BORDER}`, borderRadius: 18, boxShadow: CARD_SHADOW, padding: '20px 24px' }}>
         <div
           style={{
             display: 'flex',
