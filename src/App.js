@@ -4,12 +4,9 @@ import {
   Area,
   Bar,
   CartesianGrid,
-  Cell as RCell,
   ComposedChart,
   Legend,
   Line,
-  Pie,
-  PieChart,
   ReferenceArea,
   ReferenceLine,
   ResponsiveContainer,
@@ -180,6 +177,7 @@ function Card({ accent, style, children }) {
         borderRadius: 16,
         boxShadow: CARD_SHADOW,
         padding: 20,
+        minWidth: 0,
         ...style,
       }}
     >
@@ -1241,6 +1239,26 @@ function Cell({ value, unit, onCommit, inputStyle, placeholder = DASH, compact =
         padding: '6px 4px',
         outline: 'none',
         ...inputStyle,
+        // In the narrow compact (monthly) grid, the resting value is abbreviated;
+        // when editing, expand into a readable overlay so the full raw number is
+        // visible instead of clipping. Anchored to the (position:relative) cell.
+        ...(focused && compact
+          ? {
+              position: 'absolute',
+              top: '50%',
+              right: 6,
+              transform: 'translateY(-50%)',
+              width: 170,
+              minWidth: 170,
+              zIndex: 10,
+              color: C.text,
+              background: '#fff',
+              border: `1px solid ${C.primary}`,
+              borderRadius: 6,
+              padding: '6px 8px',
+              boxShadow: '0 2px 10px rgba(0,0,0,0.12)',
+            }
+          : {}),
       }}
     />
   );
@@ -1650,6 +1668,7 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
                           style={{
                             textAlign: 'right',
                             padding: '4px 6px',
+                            position: 'relative',
                             background: mismatch
                               ? C.redBg
                               : future
@@ -2061,7 +2080,7 @@ function DownloadsTab({ yearData, updateMetric, allYears, activeYear }) {
   ];
 
   return (
-    <div style={{ display: 'grid', gap: 16 }}>
+    <div style={{ display: 'grid', gap: 16, gridTemplateColumns: 'minmax(0, 1fr)' }}>
       <Card>
         <TabTitle title="Installs & Users" />
         <MetricTable yearData={yearData} rows={rows} updateMetric={updateMetric} />
@@ -2334,7 +2353,7 @@ function UsersTab({ yearData, updateMetric }) {
   ];
 
   return (
-    <div style={{ display: 'grid', gap: 16 }}>
+    <div style={{ display: 'grid', gap: 16, gridTemplateColumns: 'minmax(0, 1fr)' }}>
       <Card accent={C.primary}>
         <TabTitle title="Retention" accent={C.green} />
         <MetricTable
@@ -2426,7 +2445,7 @@ function TransactionsTab({ yearData, updateMetric, allYears, activeYear }) {
   });
 
   return (
-    <div style={{ display: 'grid', gap: 16 }}>
+    <div style={{ display: 'grid', gap: 16, gridTemplateColumns: 'minmax(0, 1fr)' }}>
       <Card accent={C.primary}>
         <TabTitle title="Transactions" accent={C.amber} />
         <MetricTable yearData={yearData} rows={rows} updateMetric={updateMetric} />
@@ -2627,7 +2646,7 @@ function SubTabBar({ tabs, active, onChange }) {
 function CardsTab({ yearData, updateMetric, allYears, activeYear, cardBatches, cardCountryUsers, updateRoot }) {
   const [sub, setSub] = useState('By Month');
   return (
-    <div style={{ display: 'grid', gap: 16 }}>
+    <div style={{ display: 'grid', gap: 16, gridTemplateColumns: 'minmax(0, 1fr)' }}>
       <Card>
         <TabTitle title="Top-up Cards" />
         <SubTabBar tabs={['By Month', 'By Country', 'By Batch']} active={sub} onChange={setSub} />
@@ -2762,7 +2781,7 @@ function CardsMonthlyView({ yearData, updateMetric, allYears, activeYear }) {
   const latestRatio = hasLiveData ? cardsPerUser[latest] : null;
 
   return (
-    <div style={{ display: 'grid', gap: 16 }}>
+    <div style={{ display: 'grid', gap: 16, gridTemplateColumns: 'minmax(0, 1fr)' }}>
       <Card>
         <MetricTable
           yearData={yearData}
@@ -2956,7 +2975,7 @@ function CardsByCountryView({ batches, countryUsers, updateRoot }) {
   );
 
   return (
-    <div style={{ display: 'grid', gap: 16 }}>
+    <div style={{ display: 'grid', gap: 16, gridTemplateColumns: 'minmax(0, 1fr)' }}>
       <Card>
         <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: C.primary, padding: '0 0 4px' }}>
           By Country
@@ -3027,54 +3046,36 @@ function CardsByCountryView({ batches, countryUsers, updateRoot }) {
       </Card>
       {pie.length > 0 && (
         <Card>
-          <h3 style={{ fontFamily: 'var(--font-head)', fontWeight: 600, fontSize: 16, margin: '0 0 14px' }}>
-            Cards Sold by Country
-          </h3>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 28, flexWrap: 'wrap' }}>
-            <div style={{ position: 'relative', width: 184, height: 184, flexShrink: 0 }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie data={pie} dataKey="value" nameKey="name" innerRadius={62} outerRadius={88} paddingAngle={2} stroke="none">
-                    {pie.map((m) => (
-                      <RCell key={m.name} fill={m.color} />
-                    ))}
-                  </Pie>
-                  <Tooltip content={<ChartTooltip fmt={fmtNumber} />} />
-                </PieChart>
-              </ResponsiveContainer>
+          <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8, marginBottom: 12 }}>
+            <h3 style={{ fontFamily: 'var(--font-head)', fontWeight: 600, fontSize: 16, margin: 0 }}>
+              Cards Sold by Country
+            </h3>
+            <span style={{ fontSize: 12, color: C.muted, fontVariantNumeric: 'tabular-nums' }}>
+              {fmtNumber(pieTotal)} total
+            </span>
+          </div>
+          {/* Compact 100%-stacked share bar — clearer than a donut for 2–3 segments. */}
+          <div style={{ display: 'flex', height: 16, borderRadius: 8, overflow: 'hidden', marginBottom: 14 }}>
+            {ranked.map((m) => (
               <div
-                style={{
-                  position: 'absolute',
-                  inset: 0,
-                  display: 'flex',
-                  flexDirection: 'column',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  pointerEvents: 'none',
-                }}
-              >
-                <div style={{ fontFamily: 'var(--font-head)', fontWeight: 700, fontSize: 24, lineHeight: 1 }}>
-                  {fmtNumber(pieTotal)}
-                </div>
-                <div style={{ fontSize: 10, color: C.muted, textTransform: 'uppercase', letterSpacing: '0.05em', marginTop: 3 }}>
-                  Cards Sold
-                </div>
+                key={m.name}
+                title={`${m.name}: ${fmtNumber(m.value)} (${((m.value / pieTotal) * 100).toFixed(1)}%)`}
+                style={{ width: `${(m.value / pieTotal) * 100}%`, background: m.color }}
+              />
+            ))}
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 22px' }}>
+            {ranked.map((m) => (
+              <div key={m.name} style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12.5 }}>
+                <span style={{ width: 10, height: 10, borderRadius: 3, background: m.color, flexShrink: 0 }} />
+                <span>{CARD_COUNTRY_FLAG[m.name]}</span>
+                <span style={{ fontWeight: 500 }}>{m.name}</span>
+                <span style={{ color: C.muted, fontVariantNumeric: 'tabular-nums' }}>{fmtNumber(m.value)}</span>
+                <span style={{ color: C.muted, fontVariantNumeric: 'tabular-nums' }}>
+                  · {((m.value / pieTotal) * 100).toFixed(1)}%
+                </span>
               </div>
-            </div>
-            <div style={{ flex: 1, minWidth: 220, display: 'grid', gap: 10 }}>
-              {ranked.map((m) => (
-                <div key={m.name} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13 }}>
-                  <span style={{ width: 10, height: 10, borderRadius: 3, background: m.color, flexShrink: 0 }} />
-                  <span>{CARD_COUNTRY_FLAG[m.name]}</span>
-                  <span style={{ fontWeight: 500 }}>{m.name}</span>
-                  <span style={{ flex: 1 }} />
-                  <span style={{ fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{fmtNumber(m.value)}</span>
-                  <span style={{ color: C.muted, width: 52, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
-                    {((m.value / pieTotal) * 100).toFixed(1)}%
-                  </span>
-                </div>
-              ))}
-            </div>
+            ))}
           </div>
         </Card>
       )}
@@ -3469,7 +3470,7 @@ function RevenueTab({ yearData, updateMetric }) {
   const rvc = monthChartData({ Revenue: totalRev, 'Cost of Revenue': totalCost });
 
   return (
-    <div style={{ display: 'grid', gap: 16 }}>
+    <div style={{ display: 'grid', gap: 16, gridTemplateColumns: 'minmax(0, 1fr)' }}>
       <Card accent={C.primary}>
         <TabTitle title="Costs & Revenue" accent={C.green} />
         <MetricTable yearData={yearData} rows={rows} updateMetric={updateMetric} />
@@ -3610,7 +3611,7 @@ function CampaignsTab({ yearData, updateYearField }) {
   );
 
   return (
-    <div style={{ display: 'grid', gap: 16 }}>
+    <div style={{ display: 'grid', gap: 16, gridTemplateColumns: 'minmax(0, 1fr)' }}>
       <Card accent={C.primary}>
         <TabTitle title="Campaigns" accent={C.blue} downloadLabel="Download all" />
         <p style={{ fontSize: 13, color: C.muted, marginTop: -4, marginBottom: 16 }}>
