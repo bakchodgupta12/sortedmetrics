@@ -302,6 +302,16 @@ export function normaliseData(data) {
     }
     out.years[year] = base;
   }
+  // Top-up Cards batches live at the ROOT (not under a year): batches are
+  // month-less and country-scoped, feeding the cumulative By-Country summary.
+  out.cardBatches = Array.isArray(safe.cardBatches)
+    ? safe.cardBatches.filter((b) => b && typeof b === 'object')
+    : [];
+  // Manual deduplicated unique-users per country (cannot be summed from batches).
+  out.cardCountryUsers =
+    safe.cardCountryUsers && typeof safe.cardCountryUsers === 'object'
+      ? { ...safe.cardCountryUsers }
+      : {};
   return out;
 }
 

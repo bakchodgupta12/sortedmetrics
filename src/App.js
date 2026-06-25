@@ -611,6 +611,16 @@ function Dashboard({ user, setUser, onLogout }) {
     [activeYear, canEdit]
   );
 
+  // Set a ROOT-level field (not under a year) — e.g. the Top-up Cards batch log
+  // and per-country manual unique-users, which are cumulative / month-less.
+  const updateRoot = useCallback(
+    (field, value) => {
+      if (!canEdit) return;
+      setData((prev) => (prev ? { ...prev, [field]: value } : prev));
+    },
+    [canEdit]
+  );
+
   // Year management (owners only).
   const addYear = (year) => {
     if (!canEdit) return;
@@ -679,6 +689,9 @@ function Dashboard({ user, setUser, onLogout }) {
             updateMetric={updateMetric}
             updateNote={updateNote}
             updateYearField={updateYearField}
+            updateRoot={updateRoot}
+            cardBatches={data.cardBatches || []}
+            cardCountryUsers={data.cardCountryUsers || {}}
           />
         </main>
       </div>
@@ -1886,17 +1899,6 @@ function gradient(id, color) {
   );
 }
 
-const TwoCol = ({ children }) => (
-  <div
-    style={{
-      display: 'grid',
-      gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
-      gap: 16,
-    }}
-  >
-    {children}
-  </div>
-);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Installs & Users tab (internal keys keep the legacy "download" naming)
@@ -2402,16 +2404,143 @@ function TransactionsTab({ yearData, updateMetric, allYears, activeYear }) {
 const TX_CARD_MISMATCH =
   'This figure does not match the Top-up Cards entry on the Transactions tab.';
 
-// By-market is a snapshot, not a time series: each country's figures are single
-// totals stored in the first month slot. Colours follow the table row order.
+// The Lifetime "Total Unique Users" manual figure is stored in the first month
+// slot of the active year.
 const SNAP_IDX = 0;
-const MARKETS = [
-  { name: 'Kenya', color: PASTEL.lavender, sold: 'c_mktKE_sold', value: 'c_mktKE_value', users: 'c_mktKE_users', disc: 'c_mktKE_disc', cac: 'c_mktKE_cac' },
-  { name: 'Nigeria', color: PASTEL.blue, sold: 'c_mktNG_sold', value: 'c_mktNG_value', users: 'c_mktNG_users', disc: 'c_mktNG_disc', cac: 'c_mktNG_cac' },
-  { name: 'Tanzania', color: PASTEL.sand, sold: 'c_mktTZ_sold', value: 'c_mktTZ_value', users: 'c_mktTZ_users', disc: 'c_mktTZ_disc', cac: 'c_mktTZ_cac' },
-];
 
-function CardsTab({ yearData, updateMetric, allYears, activeYear }) {
+// Top-up Cards countries (Tanzania launches Jul 1; shown from the start).
+const CARD_COUNTRIES = ['Kenya', 'Nigeria', 'Tanzania'];
+const CARD_COUNTRY_COLOR = { Kenya: PASTEL.lavender, Nigeria: PASTEL.blue, Tanzania: PASTEL.sand };
+
+const num0 = (v) => (isNum(v) ? v : 0);
+
+// ── Batch computed fields (a batch is identified by Country + Batch number) ──
+// Discounts & Fees may be negative (e.g. an ambassador overpaid) — that is valid.
+function batchDiscounts(b) {
+  if (!isNum(b.fundsSent) && !isNum(b.fundsReceived)) return null;
+  return num0(b.fundsSent) - num0(b.fundsReceived);
+}
+function batchAvgDisc(b) {
+  const d = batchDiscounts(b);
+  return d != null && isNum(b.fundsSent) && b.fundsSent !== 0 ? (d / b.fundsSent) * 100 : null;
+}
+function batchCac(b) {
+  const d = batchDiscounts(b);
+  return d != null && isNum(b.uniqueUsers) && b.uniqueUsers !== 0 ? d / b.uniqueUsers : null;
+}
+function nextBatchNo(country, batches) {
+  let mx = 0;
+  for (const b of batches) if (b.country === country && isNum(b.batchNo) && b.batchNo > mx) mx = b.batchNo;
+  return mx + 1;
+}
+function newBatchId(batches) {
+  const ids = new Set(batches.map((b) => b.id));
+  let n = batches.length + 1;
+  while (ids.has(`batch_${n}`)) n += 1;
+  return `batch_${n}`;
+}
+
+// Country-level summary, summed from that country's batches. Unique Users is the
+// MANUAL deduplicated figure (NOT summed from batches — the same user redeems
+// across batches), so CAC only resolves once that manual number is entered.
+function cardCountrySummary(country, batches, manualUsers) {
+  const bs = batches.filter((b) => b.country === country);
+  const sum = (fn) => bs.reduce((a, b) => a + num0(fn(b)), 0);
+  const volume = sum((b) => b.fundsSent);
+  const collected = sum((b) => b.fundsReceived);
+  const discounts = volume - collected;
+  const users = isNum(manualUsers) ? manualUsers : null;
+  return {
+    country,
+    count: bs.length,
+    cards: sum((b) => b.cards),
+    volume,
+    collected,
+    discounts,
+    avgDisc: volume !== 0 ? (discounts / volume) * 100 : null,
+    users,
+    cac: users != null && users !== 0 ? discounts / users : null,
+    revenue: sum((b) => b.revenue),
+  };
+}
+
+// Plain sum of a set of batches (used for the Batches-tab subtotal/total rows).
+// Unique Users / CAC deliberately do NOT roll up here (country dedup is separate).
+function batchSubtotal(bs) {
+  const sum = (fn) => bs.reduce((a, b) => a + num0(fn(b)), 0);
+  const sent = sum((b) => b.fundsSent);
+  const recv = sum((b) => b.fundsReceived);
+  const disc = sent - recv;
+  return {
+    count: bs.length,
+    cards: sum((b) => b.cards),
+    sent,
+    recv,
+    disc,
+    avg: sent !== 0 ? (disc / sent) * 100 : null,
+    rev: sum((b) => b.revenue),
+  };
+}
+
+// Sub-tab bar used inside the Top-up Cards tab (Monthly / By Country / Batches).
+function SubTabBar({ tabs, active, onChange }) {
+  return (
+    <div style={{ display: 'flex', gap: 4, borderBottom: `1px solid ${C.gray200}` }}>
+      {tabs.map((t) => {
+        const on = t === active;
+        return (
+          <button
+            key={t}
+            type="button"
+            onClick={() => onChange(t)}
+            style={{
+              background: 'none',
+              border: 'none',
+              cursor: 'pointer',
+              padding: '8px 12px',
+              fontFamily: 'var(--font-head)',
+              fontSize: 13.5,
+              fontWeight: on ? 700 : 500,
+              color: on ? C.primary : C.muted,
+              borderBottom: on ? `2.5px solid ${C.primary}` : '2.5px solid transparent',
+              marginBottom: -1,
+            }}
+          >
+            {t}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function CardsTab({ yearData, updateMetric, allYears, activeYear, cardBatches, cardCountryUsers, updateRoot }) {
+  const [sub, setSub] = useState('Monthly');
+  return (
+    <div style={{ display: 'grid', gap: 16 }}>
+      <Card>
+        <TabTitle title="Top-up Cards" />
+        <SubTabBar tabs={['Monthly', 'By Country', 'Batches']} active={sub} onChange={setSub} />
+      </Card>
+      {sub === 'Monthly' && (
+        <CardsMonthlyView
+          yearData={yearData}
+          updateMetric={updateMetric}
+          allYears={allYears}
+          activeYear={activeYear}
+        />
+      )}
+      {sub === 'By Country' && (
+        <CardsByCountryView batches={cardBatches} countryUsers={cardCountryUsers} updateRoot={updateRoot} />
+      )}
+      {sub === 'Batches' && <CardsBatchesView batches={cardBatches} updateRoot={updateRoot} />}
+    </div>
+  );
+}
+
+// Sub-tab 1 — Monthly. The existing manual monthly card-activity table, the
+// Lifetime strip, and the monthly activity chart. Unchanged logic.
+function CardsMonthlyView({ yearData, updateMetric, allYears, activeYear }) {
   const latest = latestMonthIndex(yearData);
   const sold = rawSeries(yearData, 'c_sold');
   const cardsVolume = rawSeries(yearData, 'c_valueDistributed');
@@ -2480,11 +2609,11 @@ function CardsTab({ yearData, updateMetric, allYears, activeYear }) {
     },
     {
       ...calc(
-        'CAC per Transacting User',
+        'CAC',
         'ratio',
         cacPerUser,
         null,
-        'Customer acquisition cost per transacting card user this month. Calculated as Cost of Sales ÷ Unique Users.'
+        'CAC per transacting user — customer acquisition cost per transacting card user this month. Calculated as Cost of Sales ÷ Unique Users.'
       ),
       blankTotal: true,
     },
@@ -2502,20 +2631,11 @@ function CardsTab({ yearData, updateMetric, allYears, activeYear }) {
     },
   ];
 
-  // Charts: monthly activity on a dual axis (cards vs users differ by orders of
-  // magnitude), and the by-country snapshot.
   const activityChart = monthChartDataSplit({ 'Cards Sold': sold, 'Unique Users': uniqueUsers }, latest);
-  const countryTotals = MARKETS.map((mk) => ({
-    name: mk.name,
-    value: getVal(yearData, mk.sold, SNAP_IDX) || 0,
-    color: mk.color,
-  }));
-  const countryHasData = countryTotals.some((m) => m.value > 0);
 
   return (
     <div style={{ display: 'grid', gap: 16 }}>
-      <Card accent={C.primary}>
-        <TabTitle title="Top-up Cards" accent={C.purple} />
+      <Card>
         <MetricTable yearData={yearData} rows={rows} updateMetric={updateMetric} />
         <SectionDivider />
         <LifetimeSummary
@@ -2530,51 +2650,32 @@ function CardsTab({ yearData, updateMetric, allYears, activeYear }) {
             info: 'A deduplicated all-time count of unique card users. Entered manually — it cannot be summed from the monthly Unique Users figures.',
           }}
         />
-        <SectionDivider />
-        <MarketSummaryTable yearData={yearData} updateMetric={updateMetric} />
       </Card>
-      <TwoCol>
-        <ChartCard title="Cards Sold & Unique Users" accent={C.purple}>
-          <ComposedChart data={activityChart} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
-            {upcomingRefs(latest)}
-            <CartesianGrid {...GRID} />
-            <XAxis {...X_AXIS} />
-            <YAxis {...yAxis()} yAxisId="left" />
-            <YAxis {...yAxis({ orientation: 'right' })} yAxisId="right" />
-            <Tooltip content={<ChartTooltip fmt={fmtNumber} reported={latest} />} />
-            <Legend wrapperStyle={{ fontSize: 11 }} itemSorter={null} />
-            <Bar yAxisId="left" dataKey="Cards Sold" fill={PASTEL.lavender} barSize={18} radius={[4, 4, 0, 0]} />
-            <Line yAxisId="right" type="monotone" dataKey="Unique Users" stroke={PASTEL.blue} strokeWidth={2} dot={false} connectNulls />
-            <Line
-              yAxisId="right"
-              type="monotone"
-              dataKey="Unique Users__up"
-              stroke={PASTEL.blue}
-              strokeOpacity={0.4}
-              strokeWidth={2}
-              strokeDasharray="6 6"
-              dot={false}
-              connectNulls
-              legendType="none"
-            />
-          </ComposedChart>
-        </ChartCard>
-        <ChartCard title="Cards Sold by Country" accent={C.purple}>
-          {countryHasData ? (
-            <PieChart>
-              <Pie data={countryTotals} dataKey="value" nameKey="name" innerRadius={55} outerRadius={90} paddingAngle={2}>
-                {countryTotals.map((m) => (
-                  <RCell key={m.name} fill={m.color} />
-                ))}
-              </Pie>
-              <Tooltip content={<ChartTooltip fmt={fmtNumber} />} />
-              <Legend wrapperStyle={{ fontSize: 11 }} itemSorter={null} />
-            </PieChart>
-          ) : (
-            <EmptyChart />
-          )}
-        </ChartCard>
-      </TwoCol>
+      <ChartCard title="Cards Sold & Unique Users">
+        <ComposedChart data={activityChart} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+          {upcomingRefs(latest)}
+          <CartesianGrid {...GRID} />
+          <XAxis {...X_AXIS} />
+          <YAxis {...yAxis()} yAxisId="left" />
+          <YAxis {...yAxis({ orientation: 'right' })} yAxisId="right" />
+          <Tooltip content={<ChartTooltip fmt={fmtNumber} reported={latest} />} />
+          <Legend wrapperStyle={{ fontSize: 11 }} itemSorter={null} />
+          <Bar yAxisId="left" dataKey="Cards Sold" fill={PASTEL.lavender} barSize={18} radius={[4, 4, 0, 0]} />
+          <Line yAxisId="right" type="monotone" dataKey="Unique Users" stroke={PASTEL.blue} strokeWidth={2} dot={false} connectNulls />
+          <Line
+            yAxisId="right"
+            type="monotone"
+            dataKey="Unique Users__up"
+            stroke={PASTEL.blue}
+            strokeOpacity={0.4}
+            strokeWidth={2}
+            strokeDasharray="6 6"
+            dot={false}
+            connectNulls
+            legendType="none"
+          />
+        </ComposedChart>
+      </ChartCard>
     </div>
   );
 }
@@ -2647,124 +2748,415 @@ function LifetimeSummary({ calculated, manual }) {
   );
 }
 
-// Section 3 — By Country. A per-country snapshot summary table (not a month
-// grid). Every figure is a manual total entered per country; the Total row
-// sums the additive columns and leaves the per-country rates blank.
-function MarketSummaryTable({ yearData, updateMetric }) {
-  const read = (key) => getVal(yearData, key, SNAP_IDX);
-
-  const sumCol = (k) => {
-    let acc = 0;
-    let any = false;
-    for (const mk of MARKETS) {
-      const v = read(mk[k]);
-      if (v != null) {
-        acc += v;
-        any = true;
+// Sub-tab 2 — By Country. Cumulative per-country summary, AUTO-FED from the
+// Batches log. Every column is computed except Unique Users, which is a manual
+// deduplicated per-country figure (and the denominator for CAC).
+function CardsByCountryView({ batches, countryUsers, updateRoot }) {
+  const summaries = CARD_COUNTRIES.map((c) => cardCountrySummary(c, batches, countryUsers[c]));
+  const total = summaries.reduce(
+    (t, s) => {
+      t.cards += s.cards;
+      t.volume += s.volume;
+      t.collected += s.collected;
+      t.discounts += s.discounts;
+      t.revenue += s.revenue;
+      if (isNum(s.users)) {
+        t.users += s.users;
+        t.anyUser = true;
       }
-    }
-    return any ? acc : null;
-  };
-  const tSold = sumCol('sold');
-  const tValue = sumCol('value');
-  const tUsers = sumCol('users');
+      if (s.count > 0) t.anyBatch = true;
+      return t;
+    },
+    { cards: 0, volume: 0, collected: 0, discounts: 0, revenue: 0, users: 0, anyUser: false, anyBatch: false }
+  );
+  const totalAvgDisc = total.volume !== 0 ? (total.discounts / total.volume) * 100 : null;
+  const totalCac = total.anyUser && total.users !== 0 ? total.discounts / total.users : null;
 
-  const headCell = (label, alignLeft) => (
-    <th
-      style={{
-        ...thBase,
-        textAlign: alignLeft ? 'left' : 'right',
-        padding: alignLeft ? '10px 16px' : '10px 12px',
-      }}
-    >
+  const pie = summaries
+    .filter((s) => s.cards > 0)
+    .map((s) => ({ name: s.country, value: s.cards, color: CARD_COUNTRY_COLOR[s.country] }));
+
+  const head = (label, alignLeft) => (
+    <th style={{ ...thBase, textAlign: alignLeft ? 'left' : 'right', padding: alignLeft ? '12px 16px' : '12px 12px' }}>
       {label}
     </th>
   );
-
-  const numCell = (val, unit, bold) => (
-    <td
-      style={{
-        textAlign: 'right',
-        fontSize: 13,
-        fontWeight: bold ? 700 : 600,
-        padding: '13px 12px',
-      }}
-    >
+  const num = (val, unit, bold) => (
+    <td style={{ textAlign: 'right', fontSize: 13, fontWeight: bold ? 700 : 600, padding: '12px 12px' }}>
       {val == null ? DASH : fmtByUnit(val, unit)}
     </td>
   );
 
-  // Averaging manual per-country rates isn't meaningful, so the Total row's
-  // rate columns are intentionally left blank.
-  const blankCell = () => <td style={{ padding: '13px 12px' }} />;
+  return (
+    <div style={{ display: 'grid', gap: 16 }}>
+      <Card>
+        <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: C.primary, padding: '0 0 4px' }}>
+          By Country
+        </div>
+        <div style={{ fontSize: 12, color: C.muted, marginBottom: 12 }}>
+          Cumulative totals per country, summed automatically from the Batches log. Unique Users is a manual deduplicated figure per country.
+        </div>
+        <div style={{ overflowX: 'auto', border: `1px solid ${CARD_BORDER}`, borderRadius: 16 }}>
+          <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 920 }}>
+            <thead>
+              <tr style={{ background: C.gray100 }}>
+                {head('Country', true)}
+                {head('Cards Sold')}
+                {head('Cards Volume')}
+                {head('Funds Collected')}
+                {head('Discounts & Fees')}
+                {head('Avg Discount %')}
+                {head('Unique Users')}
+                {head('CAC')}
+                {head('Revenue')}
+              </tr>
+            </thead>
+            <tbody>
+              {summaries.map((s) => {
+                const empty = s.count === 0;
+                return (
+                  <tr key={s.country} style={{ borderTop: `1px solid ${C.gray200}` }}>
+                    <td style={{ textAlign: 'left', fontSize: 13, fontWeight: 500, padding: '8px 16px', whiteSpace: 'nowrap' }}>
+                      <span style={{ color: CARD_COUNTRY_COLOR[s.country] }}>●</span> {s.country}
+                    </td>
+                    {num(empty ? null : s.cards, 'count')}
+                    {num(empty ? null : s.volume, 'usdt')}
+                    {num(empty ? null : s.collected, 'usdt')}
+                    {num(empty ? null : s.discounts, 'usdt')}
+                    {num(empty ? null : s.avgDisc, 'percent2')}
+                    <td style={{ textAlign: 'right', padding: '4px 8px' }}>
+                      <Cell
+                        value={isNum(countryUsers[s.country]) ? countryUsers[s.country] : null}
+                        unit="count"
+                        onCommit={(v) => updateRoot('cardCountryUsers', { ...countryUsers, [s.country]: v })}
+                      />
+                    </td>
+                    {num(empty ? null : s.cac, 'ratio')}
+                    {num(empty ? null : s.revenue, 'usdt')}
+                  </tr>
+                );
+              })}
+              <tr style={{ borderTop: `1px solid ${C.border}`, background: CALC_ROW_BG }}>
+                <td style={{ textAlign: 'left', fontSize: 13, fontWeight: 700, padding: '12px 16px' }}>Total</td>
+                {num(total.anyBatch ? total.cards : null, 'count', true)}
+                {num(total.anyBatch ? total.volume : null, 'usdt', true)}
+                {num(total.anyBatch ? total.collected : null, 'usdt', true)}
+                {num(total.anyBatch ? total.discounts : null, 'usdt', true)}
+                {num(totalAvgDisc, 'percent2', true)}
+                {num(total.anyUser ? total.users : null, 'count', true)}
+                {num(totalCac, 'ratio', true)}
+                {num(total.anyBatch ? total.revenue : null, 'usdt', true)}
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </Card>
+      {pie.length > 0 && (
+        <ChartCard title="Cards Sold by Country">
+          <PieChart>
+            <Pie data={pie} dataKey="value" nameKey="name" innerRadius={55} outerRadius={90} paddingAngle={2}>
+              {pie.map((m) => (
+                <RCell key={m.name} fill={m.color} />
+              ))}
+            </Pie>
+            <Tooltip content={<ChartTooltip fmt={fmtNumber} />} />
+            <Legend wrapperStyle={{ fontSize: 11 }} itemSorter={null} />
+          </PieChart>
+        </ChartCard>
+      )}
+    </div>
+  );
+}
 
-  const editCell = (key, unit) => (
-    <td style={{ textAlign: 'right', padding: '4px 8px' }}>
-      <Cell value={read(key)} unit={unit} onCommit={(v) => updateMetric(key, MONTHS[SNAP_IDX], v)} />
+// Sub-tab 3 — Batches. A paginated, country-filterable batch log. Batches are
+// month-less and numbered per country (Kenya Batch 1 ≠ Nigeria Batch 1). Totals
+// reflect every batch (computed from the full set), not just the visible page.
+const BATCH_PAGE_SIZE = 25;
+
+function CardsBatchesView({ batches, updateRoot }) {
+  const editable = useContext(EditableContext);
+  const [filter, setFilter] = useState('All');
+  const [page, setPage] = useState(0);
+
+  const setBatches = (next) => updateRoot('cardBatches', next);
+  const updateBatch = (id, patch) => setBatches(batches.map((b) => (b.id === id ? { ...b, ...patch } : b)));
+  const removeBatch = (id) => setBatches(batches.filter((b) => b.id !== id));
+  const addBatch = () => {
+    const country = filter === 'All' ? 'Kenya' : filter;
+    const next = [
+      ...batches,
+      {
+        id: newBatchId(batches),
+        country,
+        batchNo: nextBatchNo(country, batches),
+        cards: null,
+        fundsSent: null,
+        fundsReceived: null,
+        uniqueUsers: null,
+        revenue: null,
+      },
+    ];
+    setBatches(next);
+    // Surface the new row: focus its country and jump to that country's last page.
+    setFilter(country);
+    const countAfter = next.filter((b) => b.country === country).length;
+    setPage(Math.ceil(countAfter / BATCH_PAGE_SIZE) - 1);
+  };
+  const changeCountry = (id, country) => {
+    const others = batches.filter((b) => b.id !== id);
+    updateBatch(id, { country, batchNo: nextBatchNo(country, others) });
+  };
+  const selectFilter = (f) => {
+    setFilter(f);
+    setPage(0);
+  };
+
+  // Sorted by country then per-country batch number, then paginated.
+  const sorted = [...batches].sort((a, b) =>
+    a.country === b.country ? num0(a.batchNo) - num0(b.batchNo) : String(a.country).localeCompare(String(b.country))
+  );
+  const filtered = filter === 'All' ? sorted : sorted.filter((b) => b.country === filter);
+  const pageCount = Math.max(1, Math.ceil(filtered.length / BATCH_PAGE_SIZE));
+  const safePage = Math.min(page, pageCount - 1);
+  const start = safePage * BATCH_PAGE_SIZE;
+  const pageRows = filtered.slice(start, start + BATCH_PAGE_SIZE);
+
+  // Footer subtotal/total rows — computed across ALL batches, not just the page.
+  const subCountries =
+    filter === 'All' ? CARD_COUNTRIES.filter((c) => batches.some((b) => b.country === c)) : [filter];
+  const footer = subCountries.map((c) => ({ label: `${c} total`, ...batchSubtotal(batches.filter((b) => b.country === c)) }));
+  const showGrand = filter === 'All' && subCountries.length > 1;
+
+  const head = (label, align = 'right') => (
+    <th style={{ ...thBase, textAlign: align, padding: align === 'left' ? '12px 14px' : '12px 8px' }}>{label}</th>
+  );
+  const mCell = (b, key, unit) => (
+    <td style={{ textAlign: 'right', padding: '4px 6px' }}>
+      <Cell value={isNum(b[key]) ? b[key] : null} unit={unit} onCommit={(v) => updateBatch(b.id, { [key]: v })} />
+    </td>
+  );
+  const cCell = (val, unit) => (
+    <td style={{ textAlign: 'right', fontSize: 13, padding: '8px 8px', color: C.text }}>
+      {val == null ? DASH : fmtByUnit(val, unit)}
+    </td>
+  );
+  const fCell = (val, unit) => (
+    <td style={{ textAlign: 'right', fontSize: 13, fontWeight: 700, padding: '10px 8px' }}>
+      {val == null ? DASH : fmtByUnit(val, unit)}
     </td>
   );
 
+  const colCount = editable ? 11 : 10;
+
+  const pill = (label, active) => (
+    <button
+      key={label}
+      type="button"
+      onClick={() => selectFilter(label)}
+      style={{
+        padding: '5px 13px',
+        borderRadius: 7,
+        fontSize: 12,
+        cursor: 'pointer',
+        fontWeight: active ? 600 : 500,
+        background: active ? C.primary : '#fff',
+        color: active ? '#fff' : C.muted,
+        border: active ? 'none' : `1px solid ${C.border}`,
+      }}
+    >
+      {label}
+    </button>
+  );
+
   return (
-    <div style={{ marginTop: 18 }}>
-      <div
-        style={{
-          fontSize: 10.5,
-          fontWeight: 700,
-          letterSpacing: '0.06em',
-          textTransform: 'uppercase',
-          color: C.primary,
-          padding: '0 0 4px',
-        }}
-      >
-        By Country
+    <Card>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10, marginBottom: 14 }}>
+        <div>
+          <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: C.primary }}>
+            Batches
+          </div>
+          <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>
+            Each batch is one distribution run (month-less). Numbering is per country. Totals cover every batch.
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 6 }}>
+          {['All', ...CARD_COUNTRIES].map((c) => pill(c, filter === c))}
+        </div>
       </div>
-      <div style={{ fontSize: 12, color: C.muted, marginBottom: 12 }}>
-        The cumulative totals per country.
-      </div>
-      <div
-        style={{
-          overflowX: 'auto',
-          border: `1px solid ${CARD_BORDER}`,
-          borderRadius: 16,
-        }}
-      >
-        <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 720 }}>
+
+      <div style={{ overflowX: 'auto', border: `1px solid ${CARD_BORDER}`, borderRadius: 16 }}>
+        <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 1040 }}>
           <thead>
             <tr style={{ background: C.gray100 }}>
-              {headCell('Country', true)}
-              {headCell('Cards Sold')}
-              {headCell('Cards Volume')}
-              {headCell('Unique Users')}
-              {headCell('Average Discount %')}
-              {headCell('CAC per Transacting User')}
+              {head('Country', 'left')}
+              {head('Batch')}
+              {head('Cards')}
+              {head('Funds Sent')}
+              {head('Funds Received')}
+              {head('Discounts & Fees')}
+              {head('Avg Discount %')}
+              {head('Unique Users')}
+              {head('CAC')}
+              {head('Revenue')}
+              {editable && <th style={{ ...thBase, width: 34, padding: '12px 6px' }} />}
             </tr>
           </thead>
           <tbody>
-            {MARKETS.map((mk) => (
-              <tr key={mk.name} style={{ borderTop: `1px solid ${C.gray200}` }}>
-                <td style={{ textAlign: 'left', fontSize: 13, fontWeight: 500, padding: '7px 16px', whiteSpace: 'nowrap' }}>
-                  {mk.name}
+            {pageRows.length === 0 ? (
+              <tr style={{ borderTop: `1px solid ${C.gray200}` }}>
+                <td colSpan={colCount} style={{ padding: '20px 16px', color: C.muted, fontSize: 13, textAlign: 'center' }}>
+                  No batches yet.{editable ? ' Add one below to get started.' : ''}
                 </td>
-                {editCell(mk.sold, 'count')}
-                {editCell(mk.value, 'usdt')}
-                {editCell(mk.users, 'count')}
-                {editCell(mk.disc, 'percent')}
-                {editCell(mk.cac, 'ratio')}
               </tr>
-            ))}
-            <tr style={{ borderTop: `1px solid ${C.border}`, background: CALC_ROW_BG }}>
-              <td style={{ textAlign: 'left', fontSize: 13, fontWeight: 700, padding: '13px 16px' }}>Total</td>
-              {numCell(tSold, 'count', true)}
-              {numCell(tValue, 'usdt', true)}
-              {numCell(tUsers, 'count', true)}
-              {blankCell()}
-              {blankCell()}
-            </tr>
+            ) : (
+              pageRows.map((b) => (
+                <tr key={b.id} style={{ borderTop: `1px solid ${C.gray200}` }}>
+                  <td style={{ textAlign: 'left', padding: '4px 14px', whiteSpace: 'nowrap' }}>
+                    {editable ? (
+                      <select
+                        value={b.country}
+                        onChange={(e) => changeCountry(b.id, e.target.value)}
+                        style={{
+                          fontFamily: 'inherit',
+                          fontSize: 13,
+                          color: C.text,
+                          background: 'transparent',
+                          border: 'none',
+                          borderBottom: `1px dashed ${C.gray300}`,
+                          padding: '4px 2px',
+                          outline: 'none',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        {CARD_COUNTRIES.map((c) => (
+                          <option key={c} value={c}>
+                            {c}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <span style={{ fontSize: 13 }}>{b.country}</span>
+                    )}
+                  </td>
+                  <td style={{ textAlign: 'right', fontSize: 13, fontWeight: 600, padding: '4px 8px' }}>{b.batchNo}</td>
+                  {mCell(b, 'cards', 'count')}
+                  {mCell(b, 'fundsSent', 'usdt')}
+                  {mCell(b, 'fundsReceived', 'usdt')}
+                  {cCell(batchDiscounts(b), 'usdt')}
+                  {cCell(batchAvgDisc(b), 'percent2')}
+                  {mCell(b, 'uniqueUsers', 'count')}
+                  {cCell(batchCac(b), 'ratio')}
+                  {mCell(b, 'revenue', 'usdt')}
+                  {editable && (
+                    <td style={{ textAlign: 'center', padding: '4px 6px' }}>
+                      <button
+                        type="button"
+                        onClick={() => removeBatch(b.id)}
+                        title="Remove batch"
+                        style={{ border: 'none', background: 'transparent', color: C.gray400, cursor: 'pointer', fontSize: 16, lineHeight: 1, padding: 2 }}
+                      >
+                        ×
+                      </button>
+                    </td>
+                  )}
+                </tr>
+              ))
+            )}
           </tbody>
+          {footer.some((f) => f.count > 0) && (
+            <tfoot>
+              {footer
+                .filter((f) => f.count > 0)
+                .map((f) => (
+                  <tr key={f.label} style={{ borderTop: `1px solid ${C.border}`, background: CALC_ROW_BG }}>
+                    <td style={{ textAlign: 'left', fontSize: 13, fontWeight: 700, padding: '10px 14px', whiteSpace: 'nowrap' }}>{f.label}</td>
+                    <td />
+                    {fCell(f.cards, 'count')}
+                    {fCell(f.sent, 'usdt')}
+                    {fCell(f.recv, 'usdt')}
+                    {fCell(f.disc, 'usdt')}
+                    {fCell(f.avg, 'percent2')}
+                    <td style={{ textAlign: 'right', fontSize: 13, color: C.gray400, padding: '10px 8px' }}>{DASH}</td>
+                    <td style={{ textAlign: 'right', fontSize: 13, color: C.gray400, padding: '10px 8px' }}>{DASH}</td>
+                    {fCell(f.rev, 'usdt')}
+                    {editable && <td />}
+                  </tr>
+                ))}
+              {showGrand &&
+                (() => {
+                  const g = batchSubtotal(batches);
+                  return (
+                    <tr style={{ borderTop: `1px solid ${C.border}`, background: CALC_ROW_BG }}>
+                      <td style={{ textAlign: 'left', fontSize: 13, fontWeight: 800, padding: '10px 14px' }}>All countries</td>
+                      <td />
+                      {fCell(g.cards, 'count')}
+                      {fCell(g.sent, 'usdt')}
+                      {fCell(g.recv, 'usdt')}
+                      {fCell(g.disc, 'usdt')}
+                      {fCell(g.avg, 'percent2')}
+                      <td style={{ textAlign: 'right', fontSize: 13, color: C.gray400, padding: '10px 8px' }}>{DASH}</td>
+                      <td style={{ textAlign: 'right', fontSize: 13, color: C.gray400, padding: '10px 8px' }}>{DASH}</td>
+                      {fCell(g.rev, 'usdt')}
+                      {editable && <td />}
+                    </tr>
+                  );
+                })()}
+            </tfoot>
+          )}
         </table>
       </div>
-    </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10, marginTop: 12 }}>
+        <div style={{ fontSize: 12, color: C.muted }}>
+          {filtered.length === 0
+            ? '0 batches'
+            : `Showing ${start + 1}–${Math.min(start + BATCH_PAGE_SIZE, filtered.length)} of ${filtered.length} batch${filtered.length === 1 ? '' : 'es'}`}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          {pageCount > 1 && (
+            <>
+              <button type="button" onClick={() => setPage(Math.max(0, safePage - 1))} disabled={safePage === 0} style={pagerBtn(safePage === 0)}>
+                ‹ Prev
+              </button>
+              <span style={{ fontSize: 12, color: C.muted }}>
+                Page {safePage + 1} of {pageCount}
+              </span>
+              <button
+                type="button"
+                onClick={() => setPage(Math.min(pageCount - 1, safePage + 1))}
+                disabled={safePage >= pageCount - 1}
+                style={pagerBtn(safePage >= pageCount - 1)}
+              >
+                Next ›
+              </button>
+            </>
+          )}
+          {editable && (
+            <button
+              type="button"
+              onClick={addBatch}
+              style={{ border: `1px solid ${C.border}`, background: '#fff', borderRadius: 8, padding: '7px 14px', fontSize: 13, fontWeight: 600, color: C.primary, cursor: 'pointer' }}
+            >
+              + Add batch
+            </button>
+          )}
+        </div>
+      </div>
+    </Card>
   );
+}
+
+function pagerBtn(disabled) {
+  return {
+    border: `1px solid ${C.border}`,
+    background: '#fff',
+    borderRadius: 8,
+    padding: '6px 12px',
+    fontSize: 12,
+    fontWeight: 600,
+    color: disabled ? C.gray400 : C.text,
+    cursor: disabled ? 'default' : 'pointer',
+  };
 }
 
 function EmptyChart() {
@@ -3848,6 +4240,9 @@ function TabContent({
   updateMetric,
   updateNote,
   updateYearField,
+  updateRoot,
+  cardBatches,
+  cardCountryUsers,
   allYears,
 }) {
   const common = { yearData, activeYear, updateMetric, updateNote, allYears };
@@ -3859,7 +4254,14 @@ function TabContent({
     case 'Transactions':
       return <TransactionsTab {...common} />;
     case 'Top-up Cards':
-      return <CardsTab {...common} />;
+      return (
+        <CardsTab
+          {...common}
+          cardBatches={cardBatches}
+          cardCountryUsers={cardCountryUsers}
+          updateRoot={updateRoot}
+        />
+      );
     case 'Costs & Revenue':
       return <RevenueTab {...common} />;
     case 'Campaigns':
