@@ -1231,7 +1231,9 @@ function Cell({ value, unit, onCommit, inputStyle, placeholder = DASH, compact =
         minWidth: 0,
         textAlign: 'right',
         fontFamily: 'inherit',
-        fontSize: 13,
+        // Editing shows the full raw number; the slightly smaller font keeps it
+        // within the cell width without ballooning into neighbouring columns.
+        fontSize: focused && compact ? 11.5 : 13,
         color: C.text,
         background: 'transparent',
         border: 'none',
@@ -1239,26 +1241,6 @@ function Cell({ value, unit, onCommit, inputStyle, placeholder = DASH, compact =
         padding: '6px 4px',
         outline: 'none',
         ...inputStyle,
-        // In the narrow compact (monthly) grid, the resting value is abbreviated;
-        // when editing, expand into a readable overlay so the full raw number is
-        // visible instead of clipping. Anchored to the (position:relative) cell.
-        ...(focused && compact
-          ? {
-              position: 'absolute',
-              top: '50%',
-              right: 6,
-              transform: 'translateY(-50%)',
-              width: 170,
-              minWidth: 170,
-              zIndex: 10,
-              color: C.text,
-              background: '#fff',
-              border: `1px solid ${C.primary}`,
-              borderRadius: 6,
-              padding: '6px 8px',
-              boxShadow: '0 2px 10px rgba(0,0,0,0.12)',
-            }
-          : {}),
       }}
     />
   );
@@ -1345,10 +1327,10 @@ const thBase = {
 
 // Whitespace + a thin rule that separates a calculated block from the next
 // section, so groups don't run straight into one another.
-function DividerRow() {
+function DividerRow({ cols = 15 }) {
   return (
     <tr aria-hidden="true">
-      <td colSpan={15} style={{ padding: 0 }}>
+      <td colSpan={cols} style={{ padding: 0 }}>
         <div style={{ height: 1, background: C.border, margin: '12px 0 2px' }} />
       </td>
     </tr>
@@ -1423,22 +1405,26 @@ function heatCell(reportedNums, v) {
 
 function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaunchCols = 0, preLaunchLabel = 'Pre-launch', tintCalc = true }) {
   const latest = latestMonthIndex(yearData);
-  // Leading months that pre-date the programme launch sit under a neutral-grey
-  // "pre-launch" band; months after the latest reported one sit under the
-  // brand-blue "Upcoming" band. Both are labelled, with a divider at each edge.
+  // Empty periods are collapsed into THIN labelled strips so they never take a
+  // full month column each: leading pre-launch months → one grey strip; the
+  // far-future months → one brand-blue "Upcoming" strip. Only the reported
+  // months plus the single next entry month render as full ~76px columns, so
+  // the whole table fits in one view with no horizontal scroll.
   const P = Math.max(0, Math.min(12, preLaunchCols));
-  const isPre = (i) => i < P;
-  const isReported = (i) => i >= P && latest >= P && i <= latest;
-  const isFuture = (i) => i >= P && i > latest; // not-yet-reported live months
+  const frontier = Math.max(P, latest + 1); // first not-yet-reported live month (still editable)
+  const indivStart = P;
+  const indivEnd = Math.min(frontier, 11);
+  const indivMonths = [];
+  for (let i = indivStart; i <= indivEnd && i <= 11; i++) indivMonths.push(i);
+  const hasPre = P > 0;
+  const upFrom = frontier + 1; // far-future months collapsed into the strip
+  const hasUp = upFrom <= 11;
   const isCurrent = (i) => latest >= P && i === latest;
-  const upcomingStart = Math.max(P, latest + 1);
-  const hasUpcoming = upcomingStart <= 11;
-  const upcomingCols = hasUpcoming ? 12 - upcomingStart : 0;
-  const cellBorderLeft = (i) => {
-    if (P > 0 && i === P) return `1px solid ${PRELAUNCH_DIVIDER}`;
-    if (hasUpcoming && i === upcomingStart && upcomingStart > P) return `1px solid ${UP_DIVIDER}`;
-    return undefined;
-  };
+  const isFuture = (i) => i > latest; // the (single) frontier month within indivMonths
+
+  // Total rendered columns: Metric + Trend + [pre strip] + months + [up strip] + summary.
+  const colCount = 3 + (hasPre ? 1 : 0) + indivMonths.length + (hasUp ? 1 : 0);
+
   // Compact money in the narrow monthly grid so figures never truncate/collide.
   const fmtMoney = (v, unit) => (unit === 'usd' || unit === 'usdt' ? compactMoney(v) : fmtByUnit(v, unit));
 
@@ -1457,8 +1443,6 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
     padding: '9px 14px',
     borderLeft: `1px solid ${C.border}`,
     whiteSpace: 'nowrap',
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
   };
   const summaryHead = {
     ...thBase,
@@ -1467,34 +1451,77 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
     fontWeight: 700,
     borderLeft: `1px solid ${C.border}`,
   };
-  const numCellBase = { textAlign: 'right', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' };
-  const preCell = (i, key) => (
-    <td key={key} style={{ background: PRELAUNCH_BAND, borderLeft: cellBorderLeft(i) }} />
-  );
+  const numCellBase = { textAlign: 'right', whiteSpace: 'nowrap' };
+
+  // Thin empty-period strip body cell (grey for pre-launch, brand-blue for upcoming).
+  const stripCell = (which, isTotal, key) => {
+    const pre = which === 'pre';
+    return (
+      <td
+        key={key}
+        style={{
+          background: pre ? PRELAUNCH_BAND : isTotal ? UP_BAND_TOTAL : UP_BAND_DETAIL,
+          borderRight: pre ? `1px solid ${PRELAUNCH_DIVIDER}` : undefined,
+          borderLeft: pre ? undefined : `1px solid ${UP_DIVIDER}`,
+        }}
+      />
+    );
+  };
+  // Thin strip header with a vertical short label (full text in the tooltip).
+  const stripHead = (which) => {
+    const pre = which === 'pre';
+    const title = pre ? preLaunchLabel : hasUp ? `Upcoming · ${MONTHS[upFrom]} – Dec` : 'Upcoming';
+    return (
+      <th
+        key={which}
+        title={title}
+        style={{
+          ...thBase,
+          padding: '8px 0',
+          textAlign: 'center',
+          verticalAlign: 'middle',
+          background: pre ? PRELAUNCH_BAND : UP_BAND_TOTAL,
+          color: pre ? PRELAUNCH_LABEL : C.primary,
+          borderRight: pre ? `1px solid ${PRELAUNCH_DIVIDER}` : undefined,
+          borderLeft: pre ? undefined : `1px solid ${UP_DIVIDER}`,
+        }}
+      >
+        <span
+          style={{
+            writingMode: 'vertical-rl',
+            transform: 'rotate(180deg)',
+            display: 'inline-block',
+            whiteSpace: 'nowrap',
+            fontSize: 9.5,
+            letterSpacing: '0.06em',
+          }}
+        >
+          {pre ? 'Pre-launch' : 'Upcoming'}
+        </span>
+      </th>
+    );
+  };
 
   return (
     <div style={{ overflowX: 'auto' }}>
       <table
         style={{
           borderCollapse: 'collapse',
-          width: '100%',
           tableLayout: 'fixed',
-          minWidth: 1244,
           fontVariantNumeric: 'tabular-nums',
         }}
       >
-        {/* Explicit column widths so inputs shrink to the column (fixed layout)
-            and the header's "Upcoming" colspan lines up with the month cells.
-            Month columns are ~74px so abbreviated money never clips; Metric is
-            capped, the Trend sparkline is left-aligned beside the row names, and
-            the summary column is kept snug. */}
+        {/* Fixed column widths: ~76px month columns so the largest abbreviated
+            values sit comfortably; thin (34px) strips for the empty periods. */}
         <colgroup>
           <col style={{ width: 188 }} />
-          <col style={{ width: 74 }} />
-          {MONTHS.map((m) => (
-            <col key={m} style={{ width: 74 }} />
+          <col style={{ width: 72 }} />
+          {hasPre && <col style={{ width: 34 }} />}
+          {indivMonths.map((i) => (
+            <col key={i} style={{ width: 76 }} />
           ))}
-          <col style={{ width: 80 }} />
+          {hasUp && <col style={{ width: 34 }} />}
+          <col style={{ width: 84 }} />
         </colgroup>
         <thead>
           <tr style={{ borderBottom: `1px solid ${C.border}` }}>
@@ -1512,52 +1539,20 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
               Metric
             </th>
             <th style={{ ...thBase, textAlign: 'left', padding: '12px 8px 12px 0' }}>Trend</th>
-            {P > 0 && (
+            {hasPre && stripHead('pre')}
+            {indivMonths.map((i) => (
               <th
-                colSpan={P}
+                key={i}
                 style={{
                   ...thBase,
-                  textAlign: 'center',
-                  color: PRELAUNCH_LABEL,
-                  background: PRELAUNCH_BAND,
-                  borderRight: `1px solid ${PRELAUNCH_DIVIDER}`,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
+                  color: isCurrent(i) ? CURRENT_TEXT : C.muted,
+                  fontWeight: isCurrent(i) ? 700 : 500,
                 }}
               >
-                {preLaunchLabel}
+                {MONTHS[i]}
               </th>
-            )}
-            {MONTHS.map((m, i) =>
-              isReported(i) ? (
-                <th
-                  key={m}
-                  style={{
-                    ...thBase,
-                    color: isCurrent(i) ? CURRENT_TEXT : C.muted,
-                    fontWeight: isCurrent(i) ? 700 : 500,
-                  }}
-                >
-                  {m}
-                </th>
-              ) : null
-            )}
-            {hasUpcoming && (
-              <th
-                colSpan={upcomingCols}
-                style={{
-                  ...thBase,
-                  textAlign: 'center',
-                  color: C.primary,
-                  background: UP_BAND_TOTAL,
-                  borderLeft: `1px solid ${UP_DIVIDER}`,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                }}
-              >
-                {upcomingCols === 1 ? '▦ Upcoming' : `▦ Upcoming · ${MONTHS[upcomingStart]} – Dec`}
-              </th>
-            )}
+            ))}
+            {hasUp && stripHead('up')}
             <th style={summaryHead}>{totalLabel}</th>
           </tr>
         </thead>
@@ -1572,10 +1567,10 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
             if (row.kind === 'subhead') {
               return (
                 <React.Fragment key={`s${ri}`}>
-                  {needsBreak && <DividerRow />}
+                  {needsBreak && <DividerRow cols={colCount} />}
                   <tr>
                     <td
-                      colSpan={15}
+                      colSpan={colCount}
                       style={{
                         fontSize: 10.5,
                         fontWeight: 700,
@@ -1600,7 +1595,7 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
               const heatNums = row.heat ? sparkValues(series).filter(isNum) : null;
               return (
                 <React.Fragment key={row.key}>
-                  {needsBreak && <DividerRow />}
+                  {needsBreak && <DividerRow cols={colCount} />}
                   <tr style={{ borderTop: `1px solid ${C.gray200}` }}>
                     <td
                       style={{
@@ -1627,14 +1622,13 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
                     <td style={{ padding: '4px 8px 4px 0', textAlign: 'left' }}>
                       <Sparkline values={sparkValues(series)} color={SPARK_DETAIL} />
                     </td>
-                    {MONTHS.map((m, i) => {
-                      // Table-wide pre-launch band (e.g. before a programme started).
-                      if (isPre(i)) return preCell(i, m);
+                    {hasPre && stripCell('pre', false, 'pre')}
+                    {indivMonths.map((i) => {
+                      const m = MONTHS[i];
                       const cellVal = getVal(yearData, row.key, i);
                       // Per-row pre-launch (store not yet live) with no data renders
-                      // as a faint en-dash — visually lighter than a genuine
-                      // no-data em-dash, and never 0. A real value (should not
-                      // exist pre-launch) is still shown so data is never hidden.
+                      // as a faint en-dash — lighter than a genuine no-data dash,
+                      // never 0. A real value is still shown so data isn't hidden.
                       const preLaunch =
                         row.preLaunchUntil != null && i < row.preLaunchUntil && !isNum(cellVal);
                       if (preLaunch) {
@@ -1668,17 +1662,13 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
                           style={{
                             textAlign: 'right',
                             padding: '4px 6px',
-                            position: 'relative',
                             background: mismatch
                               ? C.redBg
-                              : future
-                              ? UP_BAND_DETAIL
                               : heat
                               ? heat.background
                               : launchTint
                               ? 'rgba(0,17,168,0.05)'
                               : undefined,
-                            borderLeft: cellBorderLeft(i),
                           }}
                         >
                           <Cell
@@ -1692,6 +1682,7 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
                         </td>
                       );
                     })}
+                    {hasUp && stripCell('up', false, 'up')}
                     <td
                       style={{
                         ...summaryCell,
@@ -1717,7 +1708,7 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
               const ytd = latest < 0 ? null : seriesSum(row.values, latest);
               return (
                 <React.Fragment key={`r${ri}`}>
-                  {needsBreak && <DividerRow />}
+                  {needsBreak && <DividerRow cols={colCount} />}
                   <tr style={{ borderTop: `1px solid ${C.gray200}` }}>
                     <td
                       style={{
@@ -1738,27 +1729,26 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
                     <td style={{ padding: '4px 8px 4px 0', textAlign: 'left' }}>
                       <Sparkline values={sparkValues(row.values)} color={SPARK_DETAIL} />
                     </td>
-                    {MONTHS.map((m, i) => {
-                      if (isPre(i)) return preCell(i, m);
+                    {hasPre && stripCell('pre', false, 'pre')}
+                    {indivMonths.map((i) => {
                       const future = isFuture(i);
                       const v = row.values[i];
                       return (
                         <td
-                          key={m}
+                          key={i}
                           style={{
                             ...numCellBase,
                             padding: '7px 8px',
                             fontSize: 13,
                             fontWeight: isCurrent(i) ? 600 : 400,
                             color: isCurrent(i) ? CURRENT_TEXT : C.muted,
-                            background: future ? UP_BAND_DETAIL : undefined,
-                            borderLeft: cellBorderLeft(i),
                           }}
                         >
                           {future ? '' : v == null ? DASH : fmtMoney(v, row.unit)}
                         </td>
                       );
                     })}
+                    {hasUp && stripCell('up', false, 'up')}
                     <td
                       style={{
                         ...summaryCell,
@@ -1798,8 +1788,9 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
                 <td style={{ padding: '4px 8px 4px 0', textAlign: 'left' }}>
                   <Sparkline values={sparkValues(row.values)} color={C.primary} strokeWidth={1.8} />
                 </td>
-                {row.values.map((v, i) => {
-                  if (isPre(i)) return preCell(i, i);
+                {hasPre && stripCell('pre', true, 'pre')}
+                {indivMonths.map((i) => {
+                  const v = row.values[i];
                   const future = isFuture(i);
                   const heat = !future && row.heat ? heatCell(heatNums, v) : null;
                   // A >100% conversion month is a real artifact (new users this
@@ -1827,18 +1818,14 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
                         fontWeight: weight,
                         padding: '9px 8px',
                         color,
-                        background: future
-                          ? UP_BAND_TOTAL
-                          : heat
-                          ? heat.background
-                          : undefined,
-                        borderLeft: cellBorderLeft(i),
+                        background: heat ? heat.background : undefined,
                       }}
                     >
                       {future ? '' : v == null ? DASH : `${fmtMoney(v, row.unit)}${over100 ? '*' : ''}`}
                     </td>
                   );
                 })}
+                {hasUp && stripCell('up', true, 'up')}
                 <td
                   style={{
                     ...summaryCell,
