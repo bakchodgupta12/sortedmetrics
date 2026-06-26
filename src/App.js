@@ -99,11 +99,14 @@ export function compactMoney(v) {
   if (!isNum(v)) return DASH;
   const a = Math.abs(v);
   const s = v < 0 ? '-' : '';
-  const c = (n) => n.toFixed(1).replace(/\.0$/, '');
+  // Always one decimal, every magnitude ($387.0k, $3.9k, -$247.0) so figures
+  // read consistently down a column. Counts stay integer (fmtNumber); the
+  // per-user ratio unit (CAC) keeps its 2 decimals (fmtByUnit).
+  const c = (n) => n.toFixed(1);
   if (a >= 1e9) return `${s}$${c(a / 1e9)}b`;
   if (a >= 1e6) return `${s}$${c(a / 1e6)}m`;
   if (a >= 1e3) return `${s}$${c(a / 1e3)}k`;
-  return `${s}$${Math.round(a)}`;
+  return `${s}$${c(a)}`;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -685,7 +688,7 @@ function Dashboard({ user, setUser, onLogout }) {
 
         <main
           style={{
-            maxWidth: 1120,
+            maxWidth: 1440,
             margin: '0 auto',
             padding: '24px 20px 64px',
           }}
@@ -900,7 +903,7 @@ function TopNav({
     >
       <div
         style={{
-          maxWidth: 1120,
+          maxWidth: 1440,
           margin: '0 auto',
           padding: '10px 20px',
           display: 'flex',
@@ -1366,6 +1369,12 @@ const CALC_LABEL_BG = '#f3f4fc'; // opaque ≈ CALC_ROW_BG over white (sticky co
 // Min width per reported month column — enough to hold an entered figure
 // ($134.8k / 1,213) so the grid scrolls past ~7–8 months instead of clipping.
 const REPORTED_MIN = 80;
+// Fixed 12-month grid (Cards › By Month): faint grey fill for not-yet-reported
+// months, and a light-blue fill that marks automated/calc rows as their own band.
+const UPCOMING_FILL = '#f7f7f9';
+const UPCOMING_COL_DIVIDER = '#eceaf4';
+const CALC_FILL = '#eef0fb';
+const CALC_UP_DIVIDER = '#e1e0ee';
 const SPARK_DETAIL = '#8a93d8';
 const CURRENT_TEXT = '#16161f';
 const VALUE_TEXT = '#3a3a44'; // default monthly figure colour (matches reference)
@@ -1420,21 +1429,32 @@ function heatCell(reportedNums, v) {
   return { background: `rgba(0,17,168,${a.toFixed(2)})`, color: a > 0.42 ? '#ffffff' : CURRENT_TEXT };
 }
 
-function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaunchCols = 0, preLaunchLabel = 'Pre-launch', tintCalc = true }) {
+function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaunchCols = 0, preLaunchLabel = 'Pre-launch', tintCalc = true, fixedMonths = false }) {
   const latest = latestMonthIndex(yearData);
-  // Empty periods collapse into ONE horizontal labelled band each (never a column
-  // per empty month): leading pre-launch months → a grey band on the left; the
-  // far-future months → a brand-blue "Upcoming · … – Dec" band on the right. Each
-  // band shrinks to its label (table-layout:auto) so the reported months flex and
-  // share the remaining width — the whole table fits in one view, no slider.
+  // Two layouts:
+  // • fixedMonths (Cards › By Month): a fixed 12-column grid — every month Jan–Dec
+  //   is always shown, no collapsing bands, no horizontal scroll. Months after the
+  //   latest reported one are "upcoming": plain cells with a faint grey fill. The
+  //   structure never changes month to month.
+  // • default (other data tabs): empty periods collapse into ONE horizontal
+  //   labelled band each (pre-launch grey on the left, far-future blue on the
+  //   right) so the reported months flex to share the width.
   const P = Math.max(0, Math.min(12, preLaunchCols));
   const reported = [];
-  for (let i = P; i <= latest && i <= 11; i++) reported.push(i);
-  const hasPre = P > 0;
+  if (fixedMonths) {
+    for (let i = 0; i <= 11; i++) reported.push(i);
+  } else {
+    for (let i = P; i <= latest && i <= 11; i++) reported.push(i);
+  }
+  const hasPre = !fixedMonths && P > 0;
   const upStart = Math.max(P, latest + 1); // first not-yet-reported month — entered via the band
-  const hasUp = upStart <= 11;
+  const hasUp = !fixedMonths && upStart <= 11;
   const colCount = 3 + (hasPre ? 1 : 0) + reported.length + (hasUp ? 1 : 0);
-  const isCurrent = (i) => latest >= P && i === latest;
+  const isCurrent = (i) => i === latest && (fixedMonths ? latest >= 0 : latest >= P);
+  // Fixed grid only: a month after the latest reported one is "upcoming" — faint
+  // grey fill, with a divider on the first such column.
+  const isUpcoming = (i) => fixedMonths && i > latest;
+  const isFirstUpcoming = (i) => fixedMonths && i === latest + 1 && i <= 11;
 
   // Compact money so abbreviated figures fit each cell.
   const fmtMoney = (v, unit) => (unit === 'usd' || unit === 'usdt' ? compactMoney(v) : fmtByUnit(v, unit));
@@ -1485,26 +1505,36 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
       <table
         style={{
           borderCollapse: 'collapse',
-          width: reported.length > 0 ? '100%' : 'auto',
-          tableLayout: 'auto',
+          width: fixedMonths || reported.length > 0 ? '100%' : 'auto',
+          tableLayout: fixedMonths ? 'fixed' : 'auto',
           fontVariantNumeric: 'tabular-nums',
         }}
       >
-        {/* Metric/Trend/YTD fixed; bands shrink to their label. The reported
-            month columns flex to share leftover width, but carry a min-width so
-            they can always hold an entered figure: with few months they stretch,
-            with many the table exceeds the wrapper and scrolls (overflowX:auto)
-            instead of crushing the columns and clipping the numbers. */}
-        <colgroup>
-          <col style={{ width: 190 }} />
-          <col style={{ width: 70 }} />
-          {hasPre && <col style={{ width: 160 }} />}
-          {reported.map((i) => (
-            <col key={i} style={{ minWidth: REPORTED_MIN }} />
-          ))}
-          {hasUp && <col style={{ width: 150 }} />}
-          <col style={{ width: 96 }} />
-        </colgroup>
+        {/* Fixed grid: Metric/Trend/YTD fixed, the 12 months share the rest
+            equally (table-layout:fixed; they all fit a 1440 screen because the
+            formatters compact large values). Band layout: bands shrink to their
+            label and the reported months flex with a min-width. */}
+        {fixedMonths ? (
+          <colgroup>
+            <col style={{ width: 166 }} />
+            <col style={{ width: 60 }} />
+            {reported.map((i) => (
+              <col key={i} />
+            ))}
+            <col style={{ width: 92 }} />
+          </colgroup>
+        ) : (
+          <colgroup>
+            <col style={{ width: 190 }} />
+            <col style={{ width: 70 }} />
+            {hasPre && <col style={{ width: 160 }} />}
+            {reported.map((i) => (
+              <col key={i} style={{ minWidth: REPORTED_MIN }} />
+            ))}
+            {hasUp && <col style={{ width: 150 }} />}
+            <col style={{ width: 96 }} />
+          </colgroup>
+        )}
         <thead>
           <tr style={{ borderBottom: `1px solid ${C.border}` }}>
             <th
@@ -1523,7 +1553,16 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
             <th style={{ ...thBase, textAlign: 'left', padding: '12px 8px 12px 0' }}>Trend</th>
             {hasPre && preHead}
             {reported.map((i) => (
-              <th key={i} style={{ ...thBase, minWidth: REPORTED_MIN, fontWeight: 700, color: isCurrent(i) ? CURRENT_TEXT : C.muted }}>
+              <th
+                key={i}
+                style={{
+                  ...thBase,
+                  minWidth: fixedMonths ? undefined : REPORTED_MIN,
+                  fontWeight: 700,
+                  color: isCurrent(i) ? CURRENT_TEXT : C.muted,
+                  borderLeft: isFirstUpcoming(i) ? `1px solid ${UPCOMING_COL_DIVIDER}` : undefined,
+                }}
+              >
                 {MONTHS[i]}
               </th>
             ))}
@@ -1578,6 +1617,7 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
                         fontSize: 13,
                         fontWeight: 500,
                         padding: '8px 16px',
+                        whiteSpace: fixedMonths ? 'nowrap' : undefined,
                         position: 'sticky',
                         left: 0,
                         background: C.card,
@@ -1635,7 +1675,8 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
                           title={mismatch || undefined}
                           style={{
                             textAlign: 'right',
-                            minWidth: REPORTED_MIN,
+                            minWidth: fixedMonths ? undefined : REPORTED_MIN,
+                            borderLeft: isFirstUpcoming(i) ? `1px solid ${UPCOMING_COL_DIVIDER}` : undefined,
                             // No td padding — the input carries the 8px 10px inset
                             // itself, so manual figures align to the same right edge
                             // as the computed/readonly text cells.
@@ -1646,6 +1687,8 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
                               ? heat.background
                               : row.launchIdx === i
                               ? 'rgba(0,17,168,0.05)'
+                              : isUpcoming(i)
+                              ? UPCOMING_FILL
                               : undefined,
                           }}
                         >
@@ -1697,6 +1740,7 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
                         fontWeight: 500,
                         padding: '8px 16px',
                         lineHeight: 1.25,
+                        whiteSpace: fixedMonths ? 'nowrap' : undefined,
                         position: 'sticky',
                         left: 0,
                         background: C.card,
@@ -1714,7 +1758,20 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
                       const v = row.values[i];
                       const { color, weight } = valStyle(v, isCurrent(i), false);
                       return (
-                        <td key={i} style={{ textAlign: 'right', minWidth: REPORTED_MIN, whiteSpace: 'nowrap', padding: '8px 10px', fontSize: 13, fontWeight: weight, color: v == null ? C.gray400 : color }}>
+                        <td
+                          key={i}
+                          style={{
+                            textAlign: 'right',
+                            minWidth: fixedMonths ? undefined : REPORTED_MIN,
+                            whiteSpace: 'nowrap',
+                            padding: '8px 10px',
+                            fontSize: 13,
+                            fontWeight: weight,
+                            color: v == null ? C.gray400 : color,
+                            background: isUpcoming(i) ? UPCOMING_FILL : undefined,
+                            borderLeft: isFirstUpcoming(i) ? `1px solid ${UPCOMING_COL_DIVIDER}` : undefined,
+                          }}
+                        >
                           {v == null ? DASH : fmtMoney(v, row.unit)}
                         </td>
                       );
@@ -1732,25 +1789,25 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
             // tables (genuine totals) get the heavier/brand-blue treatment.
             const isTotalRow = tintCalc;
             const heatNums = row.heat ? sparkValues(row.values).filter(isNum) : null;
+            // Fixed grid marks an automated row with a light-blue fill across the
+            // whole row; the band reads as "calculated, not inputable".
+            const calcBg = fixedMonths ? CALC_FILL : tintCalc ? CALC_ROW_BG : undefined;
             return (
               // Every other row type sets a top border; the calc row must too,
-              // or with tintCalc=false it visually merges into the row above.
-              <tr key={`c${ri}`} style={{ borderTop: `1px solid ${C.gray200}`, background: tintCalc ? CALC_ROW_BG : undefined }}>
+              // or untinted it visually merges into the row above.
+              <tr key={`c${ri}`} style={{ borderTop: `1px solid ${C.gray200}`, background: calcBg }}>
                 <td
                   style={{
                     textAlign: 'left',
                     fontSize: 13,
                     fontWeight: isTotalRow ? 700 : 500,
-                    // On no-tint tables (e.g. Cards By Month) a derived row is
-                    // distinguished only by a quiet italic, muted label + the
-                    // existing formula icon — no chip, no heavy blue tint.
-                    fontStyle: isTotalRow ? undefined : 'italic',
-                    color: isTotalRow ? undefined : C.gray700,
+                    color: fixedMonths ? VALUE_TEXT : isTotalRow ? undefined : C.gray700,
                     padding: '8px 16px',
                     lineHeight: 1.25,
+                    whiteSpace: fixedMonths ? 'nowrap' : undefined,
                     position: 'sticky',
                     left: 0,
-                    background: tintCalc ? CALC_LABEL_BG : C.card,
+                    background: fixedMonths ? CALC_FILL : tintCalc ? CALC_LABEL_BG : C.card,
                     zIndex: 1,
                   }}
                 >
@@ -1777,7 +1834,15 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
                     <td
                       key={i}
                       title={over100 ? OVER_100_NOTE : undefined}
-                      style={{ textAlign: 'right', minWidth: REPORTED_MIN, whiteSpace: 'nowrap', fontSize: 13, padding: '8px 10px', ...style }}
+                      style={{
+                        textAlign: 'right',
+                        minWidth: fixedMonths ? undefined : REPORTED_MIN,
+                        borderLeft: isFirstUpcoming(i) ? `1px solid ${CALC_UP_DIVIDER}` : undefined,
+                        whiteSpace: 'nowrap',
+                        fontSize: 13,
+                        padding: '8px 10px',
+                        ...style,
+                      }}
                     >
                       {v == null ? DASH : `${fmtMoney(v, row.unit)}${over100 ? '*' : ''}`}
                     </td>
@@ -1789,6 +1854,7 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
                     ...summaryCell,
                     fontSize: 13,
                     fontWeight: isTotalRow ? 800 : 700,
+                    background: fixedMonths ? CALC_FILL : undefined,
                     color: isNum(row.ytd) && row.ytd < 0 ? DANGER : row.ytd == null ? C.gray400 : C.text,
                   }}
                 >
@@ -2722,9 +2788,8 @@ function CardsMonthlyView({ yearData, updateMetric, allYears, activeYear }) {
           yearData={yearData}
           rows={rows}
           updateMetric={updateMetric}
-          preLaunchCols={preLaunchCols}
-          preLaunchLabel="Launched Sep 2025"
           tintCalc={false}
+          fixedMonths
         />
         <SectionDivider />
         <LifetimeSummary
