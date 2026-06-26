@@ -1161,8 +1161,9 @@ function Cell({ value, unit, onCommit, inputStyle, placeholder = DASH, compact =
           display: 'block',
           textAlign: 'right',
           fontSize: 13,
+          fontVariantNumeric: 'tabular-nums',
           color: C.text,
-          padding: '6px 4px',
+          padding: '6px 8px',
           ...inputStyle,
         }}
       >
@@ -1227,18 +1228,23 @@ function Cell({ value, unit, onCommit, inputStyle, placeholder = DASH, compact =
       // ballooning its column in auto-layout tables (it still fills via width:100%).
       size={1}
       style={{
+        // Constrain the input to its own cell: it fills the column but never
+        // balloons past it. size=1 + minWidth:0 kill the input's default
+        // ~20ch intrinsic width; box-sizing keeps the focus ring inside 100%.
         width: '100%',
         minWidth: 0,
+        boxSizing: 'border-box',
         textAlign: 'right',
         fontFamily: 'inherit',
-        // Editing shows the full raw number; the slightly smaller font keeps it
-        // within the cell width without ballooning into neighbouring columns.
-        fontSize: focused && compact ? 11.5 : 13,
-        color: C.text,
-        background: 'transparent',
-        border: 'none',
-        borderBottom: `1px solid ${focused ? C.primary : 'transparent'}`,
-        padding: '6px 4px',
+        fontSize: 13,
+        fontVariantNumeric: 'tabular-nums',
+        color: focused ? '#16161f' : C.text,
+        // Brand-blue focus ring; transparent at rest so the editing footprint
+        // is identical to the resting cell (same padding/line-height).
+        background: focused ? '#fff' : 'transparent',
+        border: `1.5px solid ${focused ? C.primary : 'transparent'}`,
+        borderRadius: 7,
+        padding: '6px 8px',
         outline: 'none',
         ...inputStyle,
       }}
@@ -1353,6 +1359,8 @@ const CALC_ROW_BG = 'rgba(0,17,168,0.045)';
 const CALC_LABEL_BG = '#f3f4fc'; // opaque ≈ CALC_ROW_BG over white (sticky col)
 const SPARK_DETAIL = '#8a93d8';
 const CURRENT_TEXT = '#16161f';
+const VALUE_TEXT = '#3a3a44'; // default monthly figure colour (matches reference)
+const DANGER = '#d23a52'; // sign-driven red for negative figures
 // Pre-launch band — neutral grey (distinct from the brand-blue upcoming band),
 // for periods before a programme started.
 const PRELAUNCH_BAND = 'rgba(123,125,132,0.06)';
@@ -1405,27 +1413,21 @@ function heatCell(reportedNums, v) {
 
 function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaunchCols = 0, preLaunchLabel = 'Pre-launch', tintCalc = true }) {
   const latest = latestMonthIndex(yearData);
-  // Empty periods are collapsed into THIN labelled strips so they never take a
-  // full month column each: leading pre-launch months → one grey strip; the
-  // far-future months → one brand-blue "Upcoming" strip. Only the reported
-  // months plus the single next entry month render as full ~76px columns, so
-  // the whole table fits in one view with no horizontal scroll.
+  // Empty periods collapse into ONE horizontal labelled band each (never a column
+  // per empty month): leading pre-launch months → a grey band on the left; the
+  // far-future months → a brand-blue "Upcoming · … – Dec" band on the right. Each
+  // band shrinks to its label (table-layout:auto) so the reported months flex and
+  // share the remaining width — the whole table fits in one view, no slider.
   const P = Math.max(0, Math.min(12, preLaunchCols));
-  const frontier = Math.max(P, latest + 1); // first not-yet-reported live month (still editable)
-  const indivStart = P;
-  const indivEnd = Math.min(frontier, 11);
-  const indivMonths = [];
-  for (let i = indivStart; i <= indivEnd && i <= 11; i++) indivMonths.push(i);
+  const reported = [];
+  for (let i = P; i <= latest && i <= 11; i++) reported.push(i);
   const hasPre = P > 0;
-  const upFrom = frontier + 1; // far-future months collapsed into the strip
-  const hasUp = upFrom <= 11;
+  const upStart = Math.max(P, latest + 1); // first not-yet-reported month — entered via the band
+  const hasUp = upStart <= 11;
+  const colCount = 3 + (hasPre ? 1 : 0) + reported.length + (hasUp ? 1 : 0);
   const isCurrent = (i) => latest >= P && i === latest;
-  const isFuture = (i) => i > latest; // the (single) frontier month within indivMonths
 
-  // Total rendered columns: Metric + Trend + [pre strip] + months + [up strip] + summary.
-  const colCount = 3 + (hasPre ? 1 : 0) + indivMonths.length + (hasUp ? 1 : 0);
-
-  // Compact money in the narrow monthly grid so figures never truncate/collide.
+  // Compact money so abbreviated figures fit each cell.
   const fmtMoney = (v, unit) => (unit === 'usd' || unit === 'usdt' ? compactMoney(v) : fmtByUnit(v, unit));
 
   const inputYtd = (key, mode) => {
@@ -1436,92 +1438,60 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
     return seriesSum(s, latest);
   };
 
-  // Sparkline drawn from the reported portion (Jan → latest) of a series.
   const sparkValues = (series) => (latest >= 0 ? series.slice(0, latest + 1) : series);
-  const summaryCell = {
-    textAlign: 'right',
-    padding: '9px 14px',
-    borderLeft: `1px solid ${C.border}`,
-    whiteSpace: 'nowrap',
-  };
-  const summaryHead = {
-    ...thBase,
-    padding: '12px 14px',
-    color: C.text,
-    fontWeight: 700,
-    borderLeft: `1px solid ${C.border}`,
-  };
-  const numCellBase = { textAlign: 'right', whiteSpace: 'nowrap' };
+  const summaryCell = { textAlign: 'right', padding: '12px 16px', borderLeft: `1px solid ${C.border}`, whiteSpace: 'nowrap' };
+  const summaryHead = { ...thBase, padding: '12px 16px', color: C.text, fontWeight: 700, borderLeft: `1px solid ${C.border}` };
 
-  // Thin empty-period strip body cell (grey for pre-launch, brand-blue for upcoming).
-  const stripCell = (which, isTotal, key) => {
-    const pre = which === 'pre';
-    return (
-      <td
-        key={key}
-        style={{
-          background: pre ? PRELAUNCH_BAND : isTotal ? UP_BAND_TOTAL : UP_BAND_DETAIL,
-          borderRight: pre ? `1px solid ${PRELAUNCH_DIVIDER}` : undefined,
-          borderLeft: pre ? undefined : `1px solid ${UP_DIVIDER}`,
-        }}
-      />
-    );
+  // Shared value-cell colour/weight. Ordinary computed rows render like detail
+  // rows (no bold/blue); only `total` rows (calc rows on tables where tintCalc)
+  // get the heavier/brand treatment. Negatives are red by the cell's own sign;
+  // the current month is emphasised uniformly across all rows.
+  const valStyle = (v, current, total) => {
+    let color;
+    let weight = total ? 600 : 400;
+    if (current) weight = total ? 700 : 600;
+    if (isNum(v) && v < 0) color = DANGER;
+    else if (current) color = total ? C.primary : CURRENT_TEXT;
+    else if (isNum(v) && v === 0) color = '#b0b0ba';
+    else color = VALUE_TEXT;
+    return { color, weight };
   };
-  // Thin strip header with a vertical short label (full text in the tooltip).
-  const stripHead = (which) => {
-    const pre = which === 'pre';
-    const title = pre ? preLaunchLabel : hasUp ? `Upcoming · ${MONTHS[upFrom]} – Dec` : 'Upcoming';
-    return (
-      <th
-        key={which}
-        title={title}
-        style={{
-          ...thBase,
-          padding: '8px 0',
-          textAlign: 'center',
-          verticalAlign: 'middle',
-          background: pre ? PRELAUNCH_BAND : UP_BAND_TOTAL,
-          color: pre ? PRELAUNCH_LABEL : C.primary,
-          borderRight: pre ? `1px solid ${PRELAUNCH_DIVIDER}` : undefined,
-          borderLeft: pre ? undefined : `1px solid ${UP_DIVIDER}`,
-        }}
-      >
-        <span
-          style={{
-            writingMode: 'vertical-rl',
-            transform: 'rotate(180deg)',
-            display: 'inline-block',
-            whiteSpace: 'nowrap',
-            fontSize: 9.5,
-            letterSpacing: '0.06em',
-          }}
-        >
-          {pre ? 'Pre-launch' : 'Upcoming'}
-        </span>
-      </th>
-    );
-  };
+
+  // Horizontal, shrink-to-label band headers + empty band body cells.
+  const preHead = (
+    <th style={{ ...thBase, textAlign: 'center', whiteSpace: 'nowrap', color: PRELAUNCH_LABEL, background: PRELAUNCH_BAND, borderRight: `1px solid ${PRELAUNCH_DIVIDER}` }}>
+      {preLaunchLabel}
+    </th>
+  );
+  const upHead = (
+    <th style={{ ...thBase, textAlign: 'center', whiteSpace: 'nowrap', color: C.primary, background: UP_BAND_TOTAL, borderLeft: `1px solid ${UP_DIVIDER}` }}>
+      {`▦ Upcoming · ${MONTHS[upStart]} – Dec`}
+    </th>
+  );
+  const preBandCell = <td style={{ background: PRELAUNCH_BAND, borderRight: `1px solid ${PRELAUNCH_DIVIDER}` }} />;
+  const upBandCell = <td style={{ background: UP_BAND_DETAIL, borderLeft: `1px solid ${UP_DIVIDER}` }} />;
 
   return (
     <div style={{ overflowX: 'auto' }}>
       <table
         style={{
           borderCollapse: 'collapse',
-          tableLayout: 'fixed',
+          width: reported.length > 0 ? '100%' : 'auto',
+          tableLayout: 'auto',
           fontVariantNumeric: 'tabular-nums',
         }}
       >
-        {/* Fixed column widths: ~76px month columns so the largest abbreviated
-            values sit comfortably; thin (34px) strips for the empty periods. */}
+        {/* Metric/Trend/YTD fixed; bands shrink to their label; the reported
+            month columns have no width so they flex and share the rest evenly. */}
         <colgroup>
-          <col style={{ width: 188 }} />
-          <col style={{ width: 72 }} />
-          {hasPre && <col style={{ width: 34 }} />}
-          {indivMonths.map((i) => (
-            <col key={i} style={{ width: 76 }} />
+          <col style={{ width: 190 }} />
+          <col style={{ width: 70 }} />
+          {hasPre && <col style={{ width: 160 }} />}
+          {reported.map((i) => (
+            <col key={i} />
           ))}
-          {hasUp && <col style={{ width: 34 }} />}
-          <col style={{ width: 84 }} />
+          {hasUp && <col style={{ width: 150 }} />}
+          <col style={{ width: 96 }} />
         </colgroup>
         <thead>
           <tr style={{ borderBottom: `1px solid ${C.border}` }}>
@@ -1529,7 +1499,7 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
               style={{
                 ...thBase,
                 textAlign: 'left',
-                padding: '12px 14px',
+                padding: '12px 16px',
                 position: 'sticky',
                 left: 0,
                 background: C.card,
@@ -1539,20 +1509,13 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
               Metric
             </th>
             <th style={{ ...thBase, textAlign: 'left', padding: '12px 8px 12px 0' }}>Trend</th>
-            {hasPre && stripHead('pre')}
-            {indivMonths.map((i) => (
-              <th
-                key={i}
-                style={{
-                  ...thBase,
-                  color: isCurrent(i) ? CURRENT_TEXT : C.muted,
-                  fontWeight: isCurrent(i) ? 700 : 500,
-                }}
-              >
+            {hasPre && preHead}
+            {reported.map((i) => (
+              <th key={i} style={{ ...thBase, fontWeight: 700, color: isCurrent(i) ? CURRENT_TEXT : C.muted }}>
                 {MONTHS[i]}
               </th>
             ))}
-            {hasUp && stripHead('up')}
+            {hasUp && upHead}
             <th style={summaryHead}>{totalLabel}</th>
           </tr>
         </thead>
@@ -1578,7 +1541,7 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
                         textTransform: 'uppercase',
                         color: C.primary,
                         textAlign: 'left',
-                        padding: '16px 14px 6px',
+                        padding: '16px 16px 6px',
                         whiteSpace: 'nowrap',
                       }}
                     >
@@ -1602,7 +1565,7 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
                         textAlign: 'left',
                         fontSize: 13,
                         fontWeight: 500,
-                        padding: '7px 14px',
+                        padding: '8px 16px',
                         position: 'sticky',
                         left: 0,
                         background: C.card,
@@ -1622,8 +1585,8 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
                     <td style={{ padding: '4px 8px 4px 0', textAlign: 'left' }}>
                       <Sparkline values={sparkValues(series)} color={SPARK_DETAIL} />
                     </td>
-                    {hasPre && stripCell('pre', false, 'pre')}
-                    {indivMonths.map((i) => {
+                    {hasPre && preBandCell}
+                    {reported.map((i) => {
                       const m = MONTHS[i];
                       const cellVal = getVal(yearData, row.key, i);
                       // Per-row pre-launch (store not yet live) with no data renders
@@ -1633,7 +1596,7 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
                         row.preLaunchUntil != null && i < row.preLaunchUntil && !isNum(cellVal);
                       if (preLaunch) {
                         return (
-                          <td key={m} style={{ textAlign: 'right', padding: '4px 6px', color: '#d4d4da' }}>
+                          <td key={m} style={{ textAlign: 'right', padding: '8px 10px', color: '#d4d4da' }}>
                             –
                           </td>
                         );
@@ -1647,14 +1610,13 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
                           mismatch = row.compare.message;
                         }
                       }
-                      const future = isFuture(i);
-                      const launchTint = row.launchIdx === i;
-                      const heat = !future && row.heat ? heatCell(heatNums, cellVal) : null;
+                      const cur = isCurrent(i);
+                      const heat = row.heat ? heatCell(heatNums, cellVal) : null;
                       const inStyle = heat
                         ? { color: heat.color, fontWeight: 600 }
-                        : isCurrent(i)
+                        : cur
                         ? { color: CURRENT_TEXT, fontWeight: 600 }
-                        : undefined;
+                        : { color: VALUE_TEXT };
                       return (
                         <td
                           key={m}
@@ -1666,7 +1628,7 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
                               ? C.redBg
                               : heat
                               ? heat.background
-                              : launchTint
+                              : row.launchIdx === i
                               ? 'rgba(0,17,168,0.05)'
                               : undefined,
                           }}
@@ -1676,26 +1638,25 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
                             unit={row.unit}
                             onCommit={(v) => updateMetric(row.key, m, v)}
                             inputStyle={inStyle}
-                            placeholder={future ? '' : DASH}
                             compact
                           />
                         </td>
                       );
                     })}
-                    {hasUp && stripCell('up', false, 'up')}
-                    <td
-                      style={{
-                        ...summaryCell,
-                        fontSize: 13,
-                        fontWeight: 700,
-                        color: ytd == null ? C.gray400 : C.text,
-                      }}
-                    >
-                      {row.ytd === 'none'
-                        ? ''
-                        : ytd == null
-                        ? DASH
-                        : fmtMoney(ytd, row.unit)}
+                    {hasUp && (
+                      // The next month is entered in the band cell (no stray column).
+                      <td style={{ background: UP_BAND_DETAIL, borderLeft: `1px solid ${UP_DIVIDER}`, padding: '4px 6px' }}>
+                        <Cell
+                          value={getVal(yearData, row.key, upStart)}
+                          unit={row.unit}
+                          onCommit={(v) => updateMetric(row.key, MONTHS[upStart], v)}
+                          placeholder=""
+                          compact
+                        />
+                      </td>
+                    )}
+                    <td style={{ ...summaryCell, fontSize: 13, fontWeight: 700, color: ytd == null ? C.gray400 : C.text }}>
+                      {row.ytd === 'none' ? '' : ytd == null ? DASH : fmtMoney(ytd, row.unit)}
                     </td>
                   </tr>
                 </React.Fragment>
@@ -1715,7 +1676,7 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
                         textAlign: 'left',
                         fontSize: 13,
                         fontWeight: 500,
-                        padding: '7px 14px',
+                        padding: '8px 16px',
                         lineHeight: 1.25,
                         position: 'sticky',
                         left: 0,
@@ -1729,34 +1690,18 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
                     <td style={{ padding: '4px 8px 4px 0', textAlign: 'left' }}>
                       <Sparkline values={sparkValues(row.values)} color={SPARK_DETAIL} />
                     </td>
-                    {hasPre && stripCell('pre', false, 'pre')}
-                    {indivMonths.map((i) => {
-                      const future = isFuture(i);
+                    {hasPre && preBandCell}
+                    {reported.map((i) => {
                       const v = row.values[i];
+                      const { color, weight } = valStyle(v, isCurrent(i), false);
                       return (
-                        <td
-                          key={i}
-                          style={{
-                            ...numCellBase,
-                            padding: '7px 8px',
-                            fontSize: 13,
-                            fontWeight: isCurrent(i) ? 600 : 400,
-                            color: isCurrent(i) ? CURRENT_TEXT : C.muted,
-                          }}
-                        >
-                          {future ? '' : v == null ? DASH : fmtMoney(v, row.unit)}
+                        <td key={i} style={{ textAlign: 'right', whiteSpace: 'nowrap', padding: '8px 10px', fontSize: 13, fontWeight: weight, color: v == null ? C.gray400 : color }}>
+                          {v == null ? DASH : fmtMoney(v, row.unit)}
                         </td>
                       );
                     })}
-                    {hasUp && stripCell('up', false, 'up')}
-                    <td
-                      style={{
-                        ...summaryCell,
-                        fontSize: 13,
-                        fontWeight: 700,
-                        color: ytd == null ? C.gray400 : C.text,
-                      }}
-                    >
+                    {hasUp && upBandCell}
+                    <td style={{ ...summaryCell, fontSize: 13, fontWeight: 700, color: ytd == null ? C.gray400 : C.text }}>
                       {ytd == null ? DASH : fmtMoney(ytd, row.unit)}
                     </td>
                   </tr>
@@ -1764,8 +1709,9 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
               );
             }
 
-            // calc row — bold (and tinted only where `tintCalc`, to avoid a
-            // scattered/random look on tables whose computed rows aren't totals).
+            // calc row — render like detail rows by default; only `tintCalc`
+            // tables (genuine totals) get the heavier/brand-blue treatment.
+            const isTotalRow = tintCalc;
             const heatNums = row.heat ? sparkValues(row.values).filter(isNum) : null;
             return (
               <tr key={`c${ri}`} style={{ background: tintCalc ? CALC_ROW_BG : undefined }}>
@@ -1773,8 +1719,8 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
                   style={{
                     textAlign: 'left',
                     fontSize: 13,
-                    fontWeight: 700,
-                    padding: '9px 14px',
+                    fontWeight: isTotalRow ? 700 : 500,
+                    padding: '8px 16px',
                     lineHeight: 1.25,
                     position: 'sticky',
                     left: 0,
@@ -1786,64 +1732,41 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
                   {row.formula && <InfoTip text={row.formula} />}
                 </td>
                 <td style={{ padding: '4px 8px 4px 0', textAlign: 'left' }}>
-                  <Sparkline values={sparkValues(row.values)} color={C.primary} strokeWidth={1.8} />
+                  <Sparkline values={sparkValues(row.values)} color={isTotalRow ? C.primary : SPARK_DETAIL} strokeWidth={isTotalRow ? 1.8 : 1.6} />
                 </td>
-                {hasPre && stripCell('pre', true, 'pre')}
-                {indivMonths.map((i) => {
+                {hasPre && preBandCell}
+                {reported.map((i) => {
                   const v = row.values[i];
-                  const future = isFuture(i);
-                  const heat = !future && row.heat ? heatCell(heatNums, v) : null;
-                  // A >100% conversion month is a real artifact (new users this
-                  // month exceeded installs, e.g. backlog/multi-device) — flag it
-                  // with an asterisk + tooltip rather than letting it read as a bug.
-                  const over100 = row.flagOver100 && !future && isNum(v) && v > 100;
-                  let color;
-                  let weight = 600;
+                  const cur = isCurrent(i);
+                  const heat = row.heat ? heatCell(heatNums, v) : null;
+                  const over100 = row.flagOver100 && isNum(v) && v > 100;
+                  let style;
                   if (heat) {
-                    color = heat.color;
-                    weight = isCurrent(i) ? 700 : 600;
-                  } else if (row.negRed && isNum(v) && v < 0) {
-                    color = C.red;
-                  } else if (isCurrent(i)) {
-                    color = C.primary;
-                    weight = 700;
+                    style = { color: heat.color, fontWeight: cur ? 700 : 600, background: heat.background };
+                  } else {
+                    const s = valStyle(v, cur, isTotalRow);
+                    style = { color: v == null ? C.gray400 : s.color, fontWeight: s.weight };
                   }
                   return (
                     <td
                       key={i}
                       title={over100 ? OVER_100_NOTE : undefined}
-                      style={{
-                        ...numCellBase,
-                        fontSize: 13,
-                        fontWeight: weight,
-                        padding: '9px 8px',
-                        color,
-                        background: heat ? heat.background : undefined,
-                      }}
+                      style={{ textAlign: 'right', whiteSpace: 'nowrap', fontSize: 13, padding: '8px 10px', ...style }}
                     >
-                      {future ? '' : v == null ? DASH : `${fmtMoney(v, row.unit)}${over100 ? '*' : ''}`}
+                      {v == null ? DASH : `${fmtMoney(v, row.unit)}${over100 ? '*' : ''}`}
                     </td>
                   );
                 })}
-                {hasUp && stripCell('up', true, 'up')}
+                {hasUp && upBandCell}
                 <td
                   style={{
                     ...summaryCell,
                     fontSize: 13,
-                    fontWeight: 800,
-                    color:
-                      row.negRed && isNum(row.ytd) && row.ytd < 0
-                        ? C.red
-                        : row.ytd == null
-                        ? C.gray400
-                        : C.text,
+                    fontWeight: isTotalRow ? 800 : 700,
+                    color: isNum(row.ytd) && row.ytd < 0 ? DANGER : row.ytd == null ? C.gray400 : C.text,
                   }}
                 >
-                  {row.blankTotal
-                    ? ''
-                    : row.ytd == null
-                    ? DASH
-                    : fmtMoney(row.ytd, row.unit)}
+                  {row.blankTotal ? '' : row.ytd == null ? DASH : fmtMoney(row.ytd, row.unit)}
                 </td>
               </tr>
             );
@@ -2775,7 +2698,7 @@ function CardsMonthlyView({ yearData, updateMetric, allYears, activeYear }) {
           rows={rows}
           updateMetric={updateMetric}
           preLaunchCols={preLaunchCols}
-          preLaunchLabel={CARD_LAUNCH_LABEL}
+          preLaunchLabel="Launched Sep 2025"
           tintCalc={false}
         />
         <SectionDivider />
