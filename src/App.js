@@ -708,6 +708,7 @@ function Dashboard({ user, setUser, onLogout }) {
             updateRoot={updateRoot}
             cardBatches={data.cardBatches || []}
             cardCountryUsers={data.cardCountryUsers || {}}
+            cardLifetimeUniqueUsers={data.cardLifetimeUniqueUsers ?? null}
           />
         </main>
       </div>
@@ -1103,6 +1104,25 @@ function priorYearsTotal(allYears, activeYear, keys) {
     }
   }
   return total;
+}
+// All-time total of `keys` summed over every month of EVERY year — independent
+// of the active year, so a "lifetime" figure reads identically in every view.
+// Returns null when there's no data at all (so the cell shows a dash, not 0).
+function allYearsTotal(allYears, keys) {
+  let total = 0;
+  let has = false;
+  for (const yd of Object.values(allYears || {})) {
+    for (let i = 0; i < 12; i++) {
+      for (const k of keys) {
+        const v = yd?.[k]?.[MONTHS[i]];
+        if (typeof v === 'number' && Number.isFinite(v)) {
+          total += v;
+          has = true;
+        }
+      }
+    }
+  }
+  return has ? total : null;
 }
 function diffSeries(a, b) {
   return IDX.map((i) => {
@@ -2479,10 +2499,6 @@ function TransactionsTab({ yearData, updateMetric, allYears, activeYear }) {
 const TX_CARD_MISMATCH =
   'This figure does not match the Top-up Cards entry on the Transactions tab.';
 
-// The Lifetime "Total Unique Users" manual figure is stored in the first month
-// slot of the active year.
-const SNAP_IDX = 0;
-
 // Top-up Cards countries (Tanzania launches Jul 1; shown from the start).
 const CARD_COUNTRIES = ['Kenya', 'Nigeria', 'Tanzania'];
 const CARD_COUNTRY_COLOR = { Kenya: PASTEL.lavender, Nigeria: PASTEL.blue, Tanzania: PASTEL.sand };
@@ -2645,7 +2661,7 @@ function SubTabBar({ tabs, active, onChange }) {
   );
 }
 
-function CardsTab({ yearData, updateMetric, allYears, activeYear, cardBatches, cardCountryUsers, updateRoot }) {
+function CardsTab({ yearData, updateMetric, allYears, activeYear, cardBatches, cardCountryUsers, cardLifetimeUniqueUsers, updateRoot }) {
   const [sub, setSub] = useState('By Month');
   return (
     <div style={{ display: 'grid', gap: 16, gridTemplateColumns: 'minmax(0, 1fr)' }}>
@@ -2659,6 +2675,8 @@ function CardsTab({ yearData, updateMetric, allYears, activeYear, cardBatches, c
           updateMetric={updateMetric}
           allYears={allYears}
           activeYear={activeYear}
+          cardLifetimeUniqueUsers={cardLifetimeUniqueUsers}
+          updateRoot={updateRoot}
         />
       )}
       {sub === 'By Country' && (
@@ -2673,7 +2691,7 @@ function CardsTab({ yearData, updateMetric, allYears, activeYear, cardBatches, c
 
 // Sub-tab 1 — Monthly. The existing manual monthly card-activity table, the
 // Lifetime strip, and the monthly activity chart. Unchanged logic.
-function CardsMonthlyView({ yearData, updateMetric, allYears, activeYear }) {
+function CardsMonthlyView({ yearData, updateMetric, allYears, activeYear, cardLifetimeUniqueUsers, updateRoot }) {
   const latest = latestMonthIndex(yearData);
   const sold = rawSeries(yearData, 'c_sold');
   const cardsVolume = rawSeries(yearData, 'c_valueDistributed');
@@ -2697,17 +2715,12 @@ function CardsMonthlyView({ yearData, updateMetric, allYears, activeYear }) {
   const costOfSalesY = volY == null && fundsY == null ? null : (volY || 0) - (fundsY || 0);
   const netRevY = seriesSum(netRevenue, latest);
 
-  // Lifetime totals carry forward across years; each is a single figure (the
-  // final value of the running total). Total Unique Users is a manual entry.
-  const lifeSold = cumulativeSeriesFrom(sold, priorYearsTotal(allYears, activeYear, ['c_sold']));
-  const lifeVolume = cumulativeSeriesFrom(cardsVolume, priorYearsTotal(allYears, activeYear, ['c_valueDistributed']));
-  const lastNonNull = (s) => {
-    for (let i = s.length - 1; i >= 0; i--) if (s[i] != null) return s[i];
-    return null;
-  };
-  const lifeSoldTotal = lastNonNull(lifeSold);
-  const lifeVolTotal = lastNonNull(lifeVolume);
-  const lifeUsersTotal = getVal(yearData, 'c_lifetimeUniqueUsers', SNAP_IDX);
+  // Lifetime = all-time, the same figure in every year view (summed across ALL
+  // years, not just up to the active one). Total Unique Users is a single manual
+  // figure stored at the ROOT (not per-year) so it shows in every year too.
+  const lifeSoldTotal = allYearsTotal(allYears, ['c_sold']);
+  const lifeVolTotal = allYearsTotal(allYears, ['c_valueDistributed']);
+  const lifeUsersTotal = isNum(cardLifetimeUniqueUsers) ? cardLifetimeUniqueUsers : null;
 
   const rows = [
     { kind: 'subhead', label: 'Card Activity' },
@@ -2800,7 +2813,7 @@ function CardsMonthlyView({ yearData, updateMetric, allYears, activeYear }) {
           manual={{
             label: 'Total Unique Users',
             value: lifeUsersTotal,
-            onCommit: (v) => updateMetric('c_lifetimeUniqueUsers', MONTHS[SNAP_IDX], v),
+            onCommit: (v) => updateRoot('cardLifetimeUniqueUsers', v),
             info: 'A deduplicated all-time count of unique card users. Entered manually — it cannot be summed from the monthly Unique Users figures.',
           }}
         />
@@ -4486,6 +4499,7 @@ function TabContent({
   updateRoot,
   cardBatches,
   cardCountryUsers,
+  cardLifetimeUniqueUsers,
   allYears,
 }) {
   const common = { yearData, activeYear, updateMetric, updateNote, allYears };
@@ -4502,6 +4516,7 @@ function TabContent({
           {...common}
           cardBatches={cardBatches}
           cardCountryUsers={cardCountryUsers}
+          cardLifetimeUniqueUsers={cardLifetimeUniqueUsers}
           updateRoot={updateRoot}
         />
       );

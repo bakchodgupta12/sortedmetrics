@@ -312,6 +312,12 @@ export function normaliseData(data) {
     safe.cardCountryUsers && typeof safe.cardCountryUsers === 'object'
       ? { ...safe.cardCountryUsers }
       : {};
+  // All-time deduplicated unique card users — a single lifetime figure entered
+  // manually. ROOT-level (not per-year) so it's the same in every year view.
+  out.cardLifetimeUniqueUsers =
+    typeof safe.cardLifetimeUniqueUsers === 'number' && Number.isFinite(safe.cardLifetimeUniqueUsers)
+      ? safe.cardLifetimeUniqueUsers
+      : null;
   return out;
 }
 
