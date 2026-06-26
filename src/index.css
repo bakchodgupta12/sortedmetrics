@@ -78,3 +78,12 @@ button {
 a {
   color: inherit;
 }
+
+/* Faint month hint shown in the Upcoming-band entry cell (e.g. "Jun ·") so the
+   inline next-month input is self-explanatory. Inline styles can't target
+   ::placeholder, so it lives here. */
+input.dc-band-hint::placeholder {
+  color: var(--gray-400);
+  font-size: 11px;
+  opacity: 1;
+}

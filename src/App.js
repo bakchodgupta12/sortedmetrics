@@ -1143,7 +1143,7 @@ function valueAt(s, i) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Editable cell + info tooltip
 // ─────────────────────────────────────────────────────────────────────────────
-function Cell({ value, unit, onCommit, inputStyle, placeholder = DASH, compact = false }) {
+function Cell({ value, unit, onCommit, inputStyle, placeholder = DASH, compact = false, className }) {
   const editable = useContext(EditableContext);
   const [focused, setFocused] = useState(false);
   const [draft, setDraft] = useState('');
@@ -1157,13 +1157,15 @@ function Cell({ value, unit, onCommit, inputStyle, placeholder = DASH, compact =
   if (!editable) {
     return (
       <span
+        className={className}
         style={{
           display: 'block',
           textAlign: 'right',
           fontSize: 13,
           fontVariantNumeric: 'tabular-nums',
           color: C.text,
-          padding: '6px 8px',
+          // Match the computed text cells' inset so Member view aligns too.
+          padding: '8px 10px',
           ...inputStyle,
         }}
       >
@@ -1227,6 +1229,7 @@ function Cell({ value, unit, onCommit, inputStyle, placeholder = DASH, compact =
       // size=1 + minWidth:0 stop the input's default ~20ch intrinsic width from
       // ballooning its column in auto-layout tables (it still fills via width:100%).
       size={1}
+      className={className}
       style={{
         // Constrain the input to its own cell: it fills the column but never
         // balloons past it. size=1 + minWidth:0 kill the input's default
@@ -1239,12 +1242,15 @@ function Cell({ value, unit, onCommit, inputStyle, placeholder = DASH, compact =
         fontSize: 13,
         fontVariantNumeric: 'tabular-nums',
         color: focused ? '#16161f' : C.text,
-        // Brand-blue focus ring; transparent at rest so the editing footprint
-        // is identical to the resting cell (same padding/line-height).
+        // Same padding as the computed text cells (8px 10px) so manual and
+        // computed figures right-align to the same edge. The focus ring is an
+        // INSET box-shadow, not a border — box-shadow doesn't take up layout
+        // space, so resting and focused footprints are identical (no ~5px shift).
         background: focused ? '#fff' : 'transparent',
-        border: `1.5px solid ${focused ? C.primary : 'transparent'}`,
+        border: 'none',
+        boxShadow: focused ? `inset 0 0 0 1.5px ${C.primary}` : 'none',
         borderRadius: 7,
-        padding: '6px 8px',
+        padding: '8px 10px',
         outline: 'none',
         ...inputStyle,
       }}
@@ -1357,6 +1363,7 @@ const UP_BAND_TOTAL = 'rgba(0,17,168,0.06)';
 const UP_DIVIDER = '#e2ddd2';
 const CALC_ROW_BG = 'rgba(0,17,168,0.045)';
 const CALC_LABEL_BG = '#f3f4fc'; // opaque ≈ CALC_ROW_BG over white (sticky col)
+const CALC_MARK_BG = '#eef0fb'; // "=" derived-row chip backing (no-tint tables)
 const SPARK_DETAIL = '#8a93d8';
 const CURRENT_TEXT = '#16161f';
 const VALUE_TEXT = '#3a3a44'; // default monthly figure colour (matches reference)
@@ -1623,7 +1630,10 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
                           title={mismatch || undefined}
                           style={{
                             textAlign: 'right',
-                            padding: '4px 6px',
+                            // No td padding — the input carries the 8px 10px inset
+                            // itself, so manual figures align to the same right edge
+                            // as the computed/readonly text cells.
+                            padding: 0,
                             background: mismatch
                               ? C.redBg
                               : heat
@@ -1644,13 +1654,16 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
                       );
                     })}
                     {hasUp && (
-                      // The next month is entered in the band cell (no stray column).
-                      <td style={{ background: UP_BAND_DETAIL, borderLeft: `1px solid ${UP_DIVIDER}`, padding: '4px 6px' }}>
+                      // The next month is entered here in the band cell (no stray
+                      // column). The placeholder names the month ("Jun ·") so inline
+                      // entry isn't a mystery; `dc-band-hint` styles it faint/small.
+                      <td style={{ background: UP_BAND_DETAIL, borderLeft: `1px solid ${UP_DIVIDER}`, padding: 0 }}>
                         <Cell
                           value={getVal(yearData, row.key, upStart)}
                           unit={row.unit}
                           onCommit={(v) => updateMetric(row.key, MONTHS[upStart], v)}
-                          placeholder=""
+                          placeholder={`${MONTHS[upStart]} ·`}
+                          className="dc-band-hint"
                           compact
                         />
                       </td>
@@ -1720,6 +1733,10 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
                     textAlign: 'left',
                     fontSize: 13,
                     fontWeight: isTotalRow ? 700 : 500,
+                    // On no-tint tables (e.g. Cards By Month) the calc rows would
+                    // otherwise look identical to manual rows — a muted label +
+                    // the "=" chip below is the quiet "this is computed" cue.
+                    color: isTotalRow ? undefined : C.gray700,
                     padding: '8px 16px',
                     lineHeight: 1.25,
                     position: 'sticky',
@@ -1728,6 +1745,27 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
                     zIndex: 1,
                   }}
                 >
+                  {!isTotalRow && (
+                    <span
+                      aria-hidden="true"
+                      style={{
+                        display: 'inline-block',
+                        width: 15,
+                        height: 15,
+                        borderRadius: 4,
+                        background: CALC_MARK_BG,
+                        color: C.primary,
+                        fontSize: 10,
+                        fontWeight: 700,
+                        textAlign: 'center',
+                        lineHeight: '15px',
+                        marginRight: 7,
+                        verticalAlign: 'middle',
+                      }}
+                    >
+                      =
+                    </span>
+                  )}
                   {row.label}
                   {row.formula && <InfoTip text={row.formula} />}
                 </td>
@@ -2669,10 +2707,9 @@ function CardsMonthlyView({ yearData, updateMetric, allYears, activeYear }) {
       noBreak: true,
       info: 'The revenue generated via the top-up card redemptions this month.',
     },
-    {
-      ...calc('Net Revenue', 'usdt', netRevenue, netRevY, 'The net value generated after deducting Cost of Sales from Gross Revenue.'),
-      negRed: true,
-    },
+    // Net Revenue is a derived row; negatives are coloured per-cell by valStyle,
+    // so no negRed flag is needed.
+    calc('Net Revenue', 'usdt', netRevenue, netRevY, 'The net value generated after deducting Cost of Sales from Gross Revenue.'),
   ];
 
   const preLaunchCols = cardPreLaunchCols(activeYear);
@@ -2878,8 +2915,10 @@ function CardsByCountryView({ batches, countryUsers, updateRoot }) {
       {label}
     </th>
   );
+  // Discounts & Fees and CAC can be negative by design — colour negatives red
+  // per cell, matching the By Month grid.
   const num = (val, unit, bold) => (
-    <td style={{ textAlign: 'right', fontSize: 13, fontWeight: bold ? 700 : 600, padding: '12px 12px' }}>
+    <td style={{ textAlign: 'right', fontSize: 13, fontWeight: bold ? 700 : 600, padding: '12px 12px', color: isNum(val) && val < 0 ? DANGER : undefined }}>
       {val == null ? DASH : fmtByUnit(val, unit)}
     </td>
   );
@@ -3086,8 +3125,9 @@ function CardsBatchesView({ batches, countryUsers, updateRoot }) {
       <Cell value={isNum(b[key]) ? b[key] : null} unit={unit} onCommit={(v) => updateBatch(b.id, { [key]: v })} />
     </td>
   );
+  // Computed batch cells (Discounts & Fees, CAC) can be negative — red per cell.
   const cCell = (val, unit) => (
-    <td style={{ textAlign: 'right', fontSize: 13, padding: '8px 8px', color: C.text }}>
+    <td style={{ textAlign: 'right', fontSize: 13, padding: '8px 8px', color: isNum(val) && val < 0 ? DANGER : C.text }}>
       {val == null ? DASH : fmtByUnit(val, unit)}
     </td>
   );
@@ -3096,7 +3136,7 @@ function CardsBatchesView({ batches, countryUsers, updateRoot }) {
   const FOOTER_BG = CALC_LABEL_BG;
   const fStick = { position: 'sticky', bottom: 0, zIndex: 1, background: FOOTER_BG };
   const fCell = (val, unit) => (
-    <td style={{ ...fStick, textAlign: 'right', fontSize: 13, fontWeight: 700, padding: '10px 8px' }}>
+    <td style={{ ...fStick, textAlign: 'right', fontSize: 13, fontWeight: 700, padding: '10px 8px', color: isNum(val) && val < 0 ? DANGER : undefined }}>
       {val == null ? DASH : fmtByUnit(val, unit)}
     </td>
   );
