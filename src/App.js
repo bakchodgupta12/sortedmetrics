@@ -1363,7 +1363,9 @@ const UP_BAND_TOTAL = 'rgba(0,17,168,0.06)';
 const UP_DIVIDER = '#e2ddd2';
 const CALC_ROW_BG = 'rgba(0,17,168,0.045)';
 const CALC_LABEL_BG = '#f3f4fc'; // opaque ≈ CALC_ROW_BG over white (sticky col)
-const CALC_MARK_BG = '#eef0fb'; // "=" derived-row chip backing (no-tint tables)
+// Min width per reported month column — enough to hold an entered figure
+// ($134.8k / 1,213) so the grid scrolls past ~7–8 months instead of clipping.
+const REPORTED_MIN = 80;
 const SPARK_DETAIL = '#8a93d8';
 const CURRENT_TEXT = '#16161f';
 const VALUE_TEXT = '#3a3a44'; // default monthly figure colour (matches reference)
@@ -1488,14 +1490,17 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
           fontVariantNumeric: 'tabular-nums',
         }}
       >
-        {/* Metric/Trend/YTD fixed; bands shrink to their label; the reported
-            month columns have no width so they flex and share the rest evenly. */}
+        {/* Metric/Trend/YTD fixed; bands shrink to their label. The reported
+            month columns flex to share leftover width, but carry a min-width so
+            they can always hold an entered figure: with few months they stretch,
+            with many the table exceeds the wrapper and scrolls (overflowX:auto)
+            instead of crushing the columns and clipping the numbers. */}
         <colgroup>
           <col style={{ width: 190 }} />
           <col style={{ width: 70 }} />
           {hasPre && <col style={{ width: 160 }} />}
           {reported.map((i) => (
-            <col key={i} />
+            <col key={i} style={{ minWidth: REPORTED_MIN }} />
           ))}
           {hasUp && <col style={{ width: 150 }} />}
           <col style={{ width: 96 }} />
@@ -1518,7 +1523,7 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
             <th style={{ ...thBase, textAlign: 'left', padding: '12px 8px 12px 0' }}>Trend</th>
             {hasPre && preHead}
             {reported.map((i) => (
-              <th key={i} style={{ ...thBase, fontWeight: 700, color: isCurrent(i) ? CURRENT_TEXT : C.muted }}>
+              <th key={i} style={{ ...thBase, minWidth: REPORTED_MIN, fontWeight: 700, color: isCurrent(i) ? CURRENT_TEXT : C.muted }}>
                 {MONTHS[i]}
               </th>
             ))}
@@ -1630,6 +1635,7 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
                           title={mismatch || undefined}
                           style={{
                             textAlign: 'right',
+                            minWidth: REPORTED_MIN,
                             // No td padding — the input carries the 8px 10px inset
                             // itself, so manual figures align to the same right edge
                             // as the computed/readonly text cells.
@@ -1708,7 +1714,7 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
                       const v = row.values[i];
                       const { color, weight } = valStyle(v, isCurrent(i), false);
                       return (
-                        <td key={i} style={{ textAlign: 'right', whiteSpace: 'nowrap', padding: '8px 10px', fontSize: 13, fontWeight: weight, color: v == null ? C.gray400 : color }}>
+                        <td key={i} style={{ textAlign: 'right', minWidth: REPORTED_MIN, whiteSpace: 'nowrap', padding: '8px 10px', fontSize: 13, fontWeight: weight, color: v == null ? C.gray400 : color }}>
                           {v == null ? DASH : fmtMoney(v, row.unit)}
                         </td>
                       );
@@ -1727,15 +1733,18 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
             const isTotalRow = tintCalc;
             const heatNums = row.heat ? sparkValues(row.values).filter(isNum) : null;
             return (
-              <tr key={`c${ri}`} style={{ background: tintCalc ? CALC_ROW_BG : undefined }}>
+              // Every other row type sets a top border; the calc row must too,
+              // or with tintCalc=false it visually merges into the row above.
+              <tr key={`c${ri}`} style={{ borderTop: `1px solid ${C.gray200}`, background: tintCalc ? CALC_ROW_BG : undefined }}>
                 <td
                   style={{
                     textAlign: 'left',
                     fontSize: 13,
                     fontWeight: isTotalRow ? 700 : 500,
-                    // On no-tint tables (e.g. Cards By Month) the calc rows would
-                    // otherwise look identical to manual rows — a muted label +
-                    // the "=" chip below is the quiet "this is computed" cue.
+                    // On no-tint tables (e.g. Cards By Month) a derived row is
+                    // distinguished only by a quiet italic, muted label + the
+                    // existing formula icon — no chip, no heavy blue tint.
+                    fontStyle: isTotalRow ? undefined : 'italic',
                     color: isTotalRow ? undefined : C.gray700,
                     padding: '8px 16px',
                     lineHeight: 1.25,
@@ -1745,27 +1754,6 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
                     zIndex: 1,
                   }}
                 >
-                  {!isTotalRow && (
-                    <span
-                      aria-hidden="true"
-                      style={{
-                        display: 'inline-block',
-                        width: 15,
-                        height: 15,
-                        borderRadius: 4,
-                        background: CALC_MARK_BG,
-                        color: C.primary,
-                        fontSize: 10,
-                        fontWeight: 700,
-                        textAlign: 'center',
-                        lineHeight: '15px',
-                        marginRight: 7,
-                        verticalAlign: 'middle',
-                      }}
-                    >
-                      =
-                    </span>
-                  )}
                   {row.label}
                   {row.formula && <InfoTip text={row.formula} />}
                 </td>
@@ -1789,7 +1777,7 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
                     <td
                       key={i}
                       title={over100 ? OVER_100_NOTE : undefined}
-                      style={{ textAlign: 'right', whiteSpace: 'nowrap', fontSize: 13, padding: '8px 10px', ...style }}
+                      style={{ textAlign: 'right', minWidth: REPORTED_MIN, whiteSpace: 'nowrap', fontSize: 13, padding: '8px 10px', ...style }}
                     >
                       {v == null ? DASH : `${fmtMoney(v, row.unit)}${over100 ? '*' : ''}`}
                     </td>
