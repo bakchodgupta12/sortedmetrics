@@ -1388,11 +1388,14 @@ const REPORTED_MIN = 80;
 // Fixed 12-month grid (Cards › By Month): a light-blue fill marks automated/calc
 // rows, and the leading "Pre-launch" / trailing "Upcoming" groups get a labelled
 // header strip plus a faint column tint (empty cells under them render blank).
+// One shared blue token for the automated/derived-row fill AND the Upcoming
+// band (label strip + column tint), so a derived row under the Upcoming band
+// reads as one continuous colour instead of two clashing shades.
 const CALC_FILL = '#eef0fb';
-const UP_COL_TINT = '#f6f7fb';
+const UP_COL_TINT = CALC_FILL;
 const PRE_COL_TINT = '#f4f3ef';
 const UP_LABEL = '#6b74c4';
-const UP_LABEL_BG = '#eef0fb';
+const UP_LABEL_BG = CALC_FILL;
 const PRE_LABEL = '#9a9aa4';
 const PRE_LABEL_BG = '#f1f0ec';
 const SPARK_DETAIL = '#8a93d8';
@@ -1409,7 +1412,7 @@ const OVER_100_NOTE =
 
 // Per-row sparkline drawn from the reported portion of a series (~60px). Muted
 // blue for detail rows, solid brand blue (heavier) for total/subtotal rows.
-function Sparkline({ values, color, strokeWidth = 1.6, width = 60, height = 21 }) {
+function Sparkline({ values, color, strokeWidth = 1.6, width = 52, height = 21 }) {
   const nums = values.filter((v) => isNum(v));
   if (nums.length < 2) return null;
   const mn = Math.min(...nums);
@@ -1544,16 +1547,24 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
   const preBandCell = <td style={{ background: PRELAUNCH_BAND, borderRight: `1px solid ${PRELAUNCH_DIVIDER}` }} />;
   const upBandCell = <td style={{ background: UP_BAND_DETAIL, borderLeft: `1px solid ${UP_DIVIDER}` }} />;
 
-  // A year fully before this tab began tracking (no reported months at all):
-  // keep the metric labels but blank every month/YTD cell and float one centered
-  // muted line over the month area — no dashes, no skeleton, no side band.
-  if (fixedMonths && latest < 0 && emptyNote) {
+  // A year fully before THIS tab began tracking. `latest` can't gate this —
+  // latestMonthIndex scans the whole year's data across every tab, so a 2023
+  // with Installs data but no Transactions still reports latest>=0. Instead,
+  // check whether any of this tab's own rows hold a value this year.
+  const tabHasData = rows.some((r) =>
+    r.kind === 'input'
+      ? rawSeries(yearData, r.key).some(isNum)
+      : Array.isArray(r.values) && r.values.some(isNum)
+  );
+  // When empty: keep the metric labels but blank every month/YTD cell and float
+  // one centered muted line over the month area — no dashes, no side band.
+  if (fixedMonths && emptyNote && !tabHasData) {
     return (
       <div style={{ overflowX: 'auto', position: 'relative' }}>
         <table style={{ borderCollapse: 'collapse', width: '100%', tableLayout: 'fixed', fontVariantNumeric: 'tabular-nums' }}>
           <colgroup>
             <col style={{ width: 166 }} />
-            <col style={{ width: 60 }} />
+            <col style={{ width: 70 }} />
             {reported.map((i) => (
               <col key={i} />
             ))}
@@ -1617,7 +1628,7 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
         {fixedMonths ? (
           <colgroup>
             <col style={{ width: 166 }} />
-            <col style={{ width: 60 }} />
+            <col style={{ width: 70 }} />
             {reported.map((i) => (
               <col key={i} />
             ))}
@@ -1753,7 +1764,7 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
                         </div>
                       )}
                     </td>
-                    <td style={{ padding: '4px 8px 4px 0', textAlign: 'left' }}>
+                    <td style={{ padding: '4px 8px 4px 0', textAlign: 'left', overflow: 'hidden' }}>
                       <Sparkline values={sparkValues(series)} color={SPARK_DETAIL} />
                     </td>
                     {hasPre && preBandCell}
@@ -1867,7 +1878,7 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
                       {row.label}
                       {row.info && <InfoTip text={row.info} />}
                     </td>
-                    <td style={{ padding: '4px 8px 4px 0', textAlign: 'left' }}>
+                    <td style={{ padding: '4px 8px 4px 0', textAlign: 'left', overflow: 'hidden' }}>
                       <Sparkline values={sparkValues(row.values)} color={SPARK_DETAIL} />
                     </td>
                     {hasPre && preBandCell}
@@ -1930,7 +1941,7 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
                   {row.label}
                   {row.formula && <InfoTip text={row.formula} />}
                 </td>
-                <td style={{ padding: '4px 8px 4px 0', textAlign: 'left' }}>
+                <td style={{ padding: '4px 8px 4px 0', textAlign: 'left', overflow: 'hidden' }}>
                   <Sparkline values={sparkValues(row.values)} color={isTotalRow ? C.primary : SPARK_DETAIL} strokeWidth={isTotalRow ? 1.8 : 1.6} />
                 </td>
                 {hasPre && preBandCell}
@@ -2117,11 +2128,21 @@ const STORE_KEYS = [
   ['dl_vivoStore', 'Vivo Store', '#F4A9A8'],
 ];
 
+// Stores live in a given year (curated): 2023–24 KaiOS only; 2025 drops Vivo;
+// 2026+ all. Removes the row AND the chart series for stores not yet live.
+function visibleStoresFor(year) {
+  return STORE_KEYS.filter(([key]) =>
+    year <= 2024 ? key === 'dl_kaios' : year === 2025 ? key !== 'dl_vivoStore' : true
+  );
+}
+
 function DownloadsTab({ yearData, updateMetric, allYears, activeYear }) {
   const latest = latestMonthIndex(yearData);
-  const storeKeys = STORE_KEYS.map((s) => s[0]);
+  const storeKeys = STORE_KEYS.map((s) => s[0]); // all stores — lifetime carry-forward
+  const visibleStores = visibleStoresFor(activeYear);
+  const visibleKeys = visibleStores.map((s) => s[0]);
 
-  const newDownloads = sumSeries(yearData, storeKeys); // "new installs" (display)
+  const newDownloads = sumSeries(yearData, visibleKeys); // "new installs" = visible stores
   const newUsers = rawSeries(yearData, 'u_newUsers');
 
   // Lifetime running totals carry forward across years (this tab only): seed
@@ -2145,17 +2166,19 @@ function DownloadsTab({ yearData, updateMetric, allYears, activeYear }) {
 
   // Per-store pre-launch boundary for the active year: months before launch
   // render as a faint en-dash (store wasn't live), the launch month is tinted.
+  // Launch-month boundary within the launch year (faint en-dash before launch,
+  // tinted launch month). No sub-label — store name only, single line.
   const storeLaunchInfo = (key) => {
     const L = STORE_LAUNCH[key];
-    if (!L) return { sub: undefined, preLaunchUntil: 0, launchIdx: -1 };
-    if (activeYear < L.y) return { sub: L.label, preLaunchUntil: 12, launchIdx: -1 };
-    if (activeYear > L.y) return { sub: L.label, preLaunchUntil: 0, launchIdx: -1 };
-    return { sub: L.label, preLaunchUntil: L.m, launchIdx: L.m };
+    if (!L) return { preLaunchUntil: 0, launchIdx: -1 };
+    if (activeYear < L.y) return { preLaunchUntil: 12, launchIdx: -1 };
+    if (activeYear > L.y) return { preLaunchUntil: 0, launchIdx: -1 };
+    return { preLaunchUntil: L.m, launchIdx: L.m };
   };
 
   const rows = [
     { kind: 'subhead', label: 'Installs' },
-    ...STORE_KEYS.map(([key, label]) => ({
+    ...visibleStores.map(([key, label]) => ({
       kind: 'input',
       key,
       label,
@@ -2208,10 +2231,9 @@ function DownloadsTab({ yearData, updateMetric, allYears, activeYear }) {
           rows={rows}
           updateMetric={updateMetric}
           fixedMonths
-          emptyNote={`Installs weren't tracked in ${activeYear}`}
         />
       </Card>
-      <StoreInstallsChart yearData={yearData} latest={latest} />
+      <StoreInstallsChart yearData={yearData} latest={latest} stores={visibleStores} />
     </div>
   );
 }
@@ -2234,9 +2256,9 @@ function niceCeil(n) {
 // Volume: bar height = that month's real total installs (bars differ in height).
 // Share: 100%-stacked (every bar full height). Future months render as clean
 // empty "Upcoming" slots; reported bars end at the current month.
-function StoreInstallsChart({ yearData, latest }) {
+function StoreInstallsChart({ yearData, latest, stores: storeDefs = STORE_KEYS }) {
   const [mode, setMode] = useState('volume');
-  const stores = STORE_KEYS.map(([key, label, color]) => ({
+  const stores = storeDefs.map(([key, label, color]) => ({
     key,
     label,
     color,
@@ -2429,7 +2451,7 @@ function StoreInstallsChart({ yearData, latest }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Users tab
 // ─────────────────────────────────────────────────────────────────────────────
-function UsersTab({ yearData, updateMetric, activeYear }) {
+function UsersTab({ yearData, updateMetric }) {
   const mau = rawSeries(yearData, 'u_mau');
   const dau = rawSeries(yearData, 'u_dau');
   const dauMau = pctSeries(dau, mau); // point-in-time monthly stickiness
@@ -2488,7 +2510,6 @@ function UsersTab({ yearData, updateMetric, activeYear }) {
           updateMetric={updateMetric}
           totalLabel="Avg"
           fixedMonths
-          emptyNote={`Retention wasn't tracked in ${activeYear}`}
         />
       </Card>
     </div>
@@ -3548,7 +3569,7 @@ function EmptyChart() {
 // ─────────────────────────────────────────────────────────────────────────────
 // Revenue tab
 // ─────────────────────────────────────────────────────────────────────────────
-function RevenueTab({ yearData, updateMetric, activeYear }) {
+function RevenueTab({ yearData, updateMetric }) {
   const latest = latestMonthIndex(yearData);
   // Top-up card fee revenue is pulled from the Top-up Cards tab, not entered.
   const topupRev = rawSeries(yearData, 'c_grossRevenue');
@@ -3607,7 +3628,6 @@ function RevenueTab({ yearData, updateMetric, activeYear }) {
           rows={rows}
           updateMetric={updateMetric}
           fixedMonths
-          emptyNote={`Revenue wasn't tracked in ${activeYear}`}
         />
       </Card>
       <ChartCard title="Revenue vs Costs" accent={C.green}>
