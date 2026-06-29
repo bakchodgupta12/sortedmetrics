@@ -1374,12 +1374,6 @@ function DividerRow({ cols = 15 }) {
   );
 }
 
-// Standalone section break (whitespace + a thin rule) for separating blocks
-// that live outside a single MetricTable, e.g. the Top-up Cards sub-sections.
-function SectionDivider() {
-  return <div aria-hidden="true" style={{ height: 1, background: C.border, margin: '16px 0 0' }} />;
-}
-
 // ── Table restyle primitives (per the design reference) ─────────────────────
 // Upcoming-months band tints, the reported→upcoming divider, and the muted
 // sparkline colour for detail rows. Totals use the brand-blue primary.
@@ -1455,7 +1449,7 @@ function heatCell(reportedNums, v) {
   return { background: `rgba(0,17,168,${a.toFixed(2)})`, color: a > 0.42 ? '#ffffff' : CURRENT_TEXT };
 }
 
-function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaunchCols = 0, preLaunchLabel = 'Pre-launch', tintCalc = true, fixedMonths = false }) {
+function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaunchCols = 0, preLaunchLabel = 'Pre-launch', tintCalc = true, fixedMonths = false, emptyNote = null }) {
   const latest = latestMonthIndex(yearData);
   // Two layouts:
   // • fixedMonths (Cards › By Month): a fixed 12-column grid — every month Jan–Dec
@@ -1500,7 +1494,10 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
     return seriesSum(s, latest);
   };
 
-  const sparkValues = (series) => (latest >= 0 ? series.slice(0, latest + 1) : series);
+  // Plot the trend over the reported window only — drop leading pre-launch
+  // months so the points span the full Trend cell instead of bunching at the
+  // right (the nulls are filtered from the polyline but not from x-spacing).
+  const sparkValues = (series) => (latest >= 0 ? series.slice(P, latest + 1) : series);
   const groupLabel = (color, bg) => ({
     textAlign: 'center',
     whiteSpace: 'nowrap',
@@ -1546,6 +1543,62 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
   );
   const preBandCell = <td style={{ background: PRELAUNCH_BAND, borderRight: `1px solid ${PRELAUNCH_DIVIDER}` }} />;
   const upBandCell = <td style={{ background: UP_BAND_DETAIL, borderLeft: `1px solid ${UP_DIVIDER}` }} />;
+
+  // A year fully before this tab began tracking (no reported months at all):
+  // keep the metric labels but blank every month/YTD cell and float one centered
+  // muted line over the month area — no dashes, no skeleton, no side band.
+  if (fixedMonths && latest < 0 && emptyNote) {
+    return (
+      <div style={{ overflowX: 'auto', position: 'relative' }}>
+        <table style={{ borderCollapse: 'collapse', width: '100%', tableLayout: 'fixed', fontVariantNumeric: 'tabular-nums' }}>
+          <colgroup>
+            <col style={{ width: 166 }} />
+            <col style={{ width: 60 }} />
+            {reported.map((i) => (
+              <col key={i} />
+            ))}
+            <col style={{ width: 92 }} />
+          </colgroup>
+          <thead>
+            <tr style={{ borderBottom: `1px solid ${C.border}` }}>
+              <th style={{ ...thBase, textAlign: 'left', padding: '12px 16px' }}>Metric</th>
+              <th style={{ ...thBase, textAlign: 'left', padding: '12px 8px 12px 0' }}>Trend</th>
+              {reported.map((i) => (
+                <th key={i} style={{ ...thBase }} />
+              ))}
+              <th style={summaryHead}>{totalLabel}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, ri) =>
+              row.kind === 'subhead' ? (
+                <tr key={`s${ri}`}>
+                  <td
+                    colSpan={colCount}
+                    style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '0.07em', textTransform: 'uppercase', color: C.primary, textAlign: 'left', padding: '16px 16px 6px', whiteSpace: 'nowrap' }}
+                  >
+                    {row.label}
+                  </td>
+                </tr>
+              ) : (
+                <tr key={`e${ri}`} style={{ borderTop: `1px solid ${C.gray200}` }}>
+                  <td style={{ textAlign: 'left', fontSize: 13, fontWeight: 500, padding: '9px 16px', whiteSpace: 'nowrap', color: C.muted }}>
+                    {row.label}
+                  </td>
+                  <td colSpan={colCount - 1} />
+                </tr>
+              )
+            )}
+          </tbody>
+        </table>
+        {/* Centered note across the month area (Metric 166 + Trend 60 on the
+            left, YTD 92 on the right are left clear). */}
+        <div style={{ position: 'absolute', top: 0, bottom: 0, left: 226, right: 92, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
+          <span style={{ fontSize: 13, color: C.muted }}>{emptyNote}</span>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={{ overflowX: 'auto' }}>
@@ -2150,7 +2203,13 @@ function DownloadsTab({ yearData, updateMetric, allYears, activeYear }) {
     <div style={{ display: 'grid', gap: 16, gridTemplateColumns: 'minmax(0, 1fr)' }}>
       <Card>
         <TabTitle title="Installs & Users" />
-        <MetricTable yearData={yearData} rows={rows} updateMetric={updateMetric} />
+        <MetricTable
+          yearData={yearData}
+          rows={rows}
+          updateMetric={updateMetric}
+          fixedMonths
+          emptyNote={`Installs weren't tracked in ${activeYear}`}
+        />
       </Card>
       <StoreInstallsChart yearData={yearData} latest={latest} />
     </div>
@@ -2370,7 +2429,7 @@ function StoreInstallsChart({ yearData, latest }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Users tab
 // ─────────────────────────────────────────────────────────────────────────────
-function UsersTab({ yearData, updateMetric }) {
+function UsersTab({ yearData, updateMetric, activeYear }) {
   const mau = rawSeries(yearData, 'u_mau');
   const dau = rawSeries(yearData, 'u_dau');
   const dauMau = pctSeries(dau, mau); // point-in-time monthly stickiness
@@ -2428,6 +2487,8 @@ function UsersTab({ yearData, updateMetric }) {
           rows={rows}
           updateMetric={updateMetric}
           totalLabel="Avg"
+          fixedMonths
+          emptyNote={`Retention wasn't tracked in ${activeYear}`}
         />
       </Card>
     </div>
@@ -2515,7 +2576,13 @@ function TransactionsTab({ yearData, updateMetric, allYears, activeYear }) {
     <div style={{ display: 'grid', gap: 16, gridTemplateColumns: 'minmax(0, 1fr)' }}>
       <Card accent={C.primary}>
         <TabTitle title="Transactions" accent={C.amber} />
-        <MetricTable yearData={yearData} rows={rows} updateMetric={updateMetric} />
+        <MetricTable
+          yearData={yearData}
+          rows={rows}
+          updateMetric={updateMetric}
+          fixedMonths
+          emptyNote={`Transactions weren't tracked in ${activeYear}`}
+        />
       </Card>
       <ChartCard title="Transaction Volume by Category" accent={C.amber}>
         <ComposedChart data={volData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
@@ -2841,6 +2908,19 @@ function CardsMonthlyView({ yearData, updateMetric, allYears, activeYear, cardLi
 
   return (
     <div style={{ display: 'grid', gap: 16, gridTemplateColumns: 'minmax(0, 1fr)' }}>
+      {/* KPI strip: the Lifetime tiles pulled above the table (Option A). */}
+      <LifetimeSummary
+        calculated={[
+          { label: 'Total Cards Sold', value: lifeSoldTotal == null ? DASH : fmtNumber(lifeSoldTotal) },
+          { label: 'Total Cards Volume', value: fmtByUnit(lifeVolTotal, 'usdt') },
+        ]}
+        manual={{
+          label: 'Total Unique Users',
+          value: lifeUsersTotal,
+          onCommit: (v) => updateRoot('cardLifetimeUniqueUsers', v),
+          info: 'A deduplicated all-time count of unique card users. Entered manually — it cannot be summed from the monthly Unique Users figures.',
+        }}
+      />
       <Card style={{ padding: '10px 22px' }}>
         <MetricTable
           yearData={yearData}
@@ -2849,19 +2929,6 @@ function CardsMonthlyView({ yearData, updateMetric, allYears, activeYear, cardLi
           preLaunchCols={preLaunchCols}
           tintCalc={false}
           fixedMonths
-        />
-        <SectionDivider />
-        <LifetimeSummary
-          calculated={[
-            { label: 'Total Cards Sold', value: lifeSoldTotal == null ? DASH : fmtNumber(lifeSoldTotal) },
-            { label: 'Total Cards Volume', value: fmtByUnit(lifeVolTotal, 'usdt') },
-          ]}
-          manual={{
-            label: 'Total Unique Users',
-            value: lifeUsersTotal,
-            onCommit: (v) => updateRoot('cardLifetimeUniqueUsers', v),
-            info: 'A deduplicated all-time count of unique card users. Entered manually — it cannot be summed from the monthly Unique Users figures.',
-          }}
         />
       </Card>
       <Card style={{ paddingBottom: 12 }}>
@@ -2947,7 +3014,7 @@ function LifetimeSummary({ calculated, manual }) {
   const valueStyle = { fontFamily: 'var(--font-head)', fontSize: 28, fontWeight: 700, marginTop: 8 };
 
   return (
-    <div style={{ marginTop: 18 }}>
+    <div>
       <div
         style={{
           fontSize: 10.5,
@@ -3481,7 +3548,7 @@ function EmptyChart() {
 // ─────────────────────────────────────────────────────────────────────────────
 // Revenue tab
 // ─────────────────────────────────────────────────────────────────────────────
-function RevenueTab({ yearData, updateMetric }) {
+function RevenueTab({ yearData, updateMetric, activeYear }) {
   const latest = latestMonthIndex(yearData);
   // Top-up card fee revenue is pulled from the Top-up Cards tab, not entered.
   const topupRev = rawSeries(yearData, 'c_grossRevenue');
@@ -3535,7 +3602,13 @@ function RevenueTab({ yearData, updateMetric }) {
     <div style={{ display: 'grid', gap: 16, gridTemplateColumns: 'minmax(0, 1fr)' }}>
       <Card accent={C.primary}>
         <TabTitle title="Costs & Revenue" accent={C.green} />
-        <MetricTable yearData={yearData} rows={rows} updateMetric={updateMetric} />
+        <MetricTable
+          yearData={yearData}
+          rows={rows}
+          updateMetric={updateMetric}
+          fixedMonths
+          emptyNote={`Revenue wasn't tracked in ${activeYear}`}
+        />
       </Card>
       <ChartCard title="Revenue vs Costs" accent={C.green}>
         <ComposedChart data={rvc} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
