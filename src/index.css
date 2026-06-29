@@ -87,3 +87,18 @@ input.dc-band-hint::placeholder {
   font-size: 11px;
   opacity: 1;
 }
+
+/* Print / "Save as PDF" (Dashboard export): drop the chrome that shouldn't be
+   captured (top nav, the Download button) and force background colours to
+   render so charts and tinted cells survive the export. */
+@media print {
+  [data-no-print] {
+    display: none !important;
+  }
+  *,
+  *::before,
+  *::after {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+}

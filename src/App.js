@@ -708,7 +708,6 @@ function Dashboard({ user, setUser, onLogout }) {
             updateRoot={updateRoot}
             cardBatches={data.cardBatches || []}
             cardCountryUsers={data.cardCountryUsers || {}}
-            cardLifetimeUniqueUsers={data.cardLifetimeUniqueUsers ?? null}
           />
         </main>
       </div>
@@ -893,6 +892,7 @@ function TopNav({
 
   return (
     <header
+      data-no-print=""
       style={{
         position: 'sticky',
         top: 0,
@@ -2225,7 +2225,10 @@ function DownloadsTab({ yearData, updateMetric, allYears, activeYear }) {
   return (
     <div style={{ display: 'grid', gap: 16, gridTemplateColumns: 'minmax(0, 1fr)' }}>
       <Card>
-        <TabTitle title="Installs & Users" />
+        <TabTitle
+          title="Installs & Users"
+          onDownload={() => downloadTextFile(`sorted-installs-users-${activeYear}.csv`, metricRowsToCsv(rows, yearData, 'YTD'))}
+        />
         <MetricTable
           yearData={yearData}
           rows={rows}
@@ -2451,7 +2454,7 @@ function StoreInstallsChart({ yearData, latest, stores: storeDefs = STORE_KEYS }
 // ─────────────────────────────────────────────────────────────────────────────
 // Users tab
 // ─────────────────────────────────────────────────────────────────────────────
-function UsersTab({ yearData, updateMetric }) {
+function UsersTab({ yearData, updateMetric, activeYear }) {
   const mau = rawSeries(yearData, 'u_mau');
   const dau = rawSeries(yearData, 'u_dau');
   const dauMau = pctSeries(dau, mau); // point-in-time monthly stickiness
@@ -2503,7 +2506,11 @@ function UsersTab({ yearData, updateMetric }) {
   return (
     <div style={{ display: 'grid', gap: 16, gridTemplateColumns: 'minmax(0, 1fr)' }}>
       <Card accent={C.primary}>
-        <TabTitle title="Retention" accent={C.green} />
+        <TabTitle
+          title="Retention"
+          accent={C.green}
+          onDownload={() => downloadTextFile(`sorted-retention-${activeYear}.csv`, metricRowsToCsv(rows, yearData, 'Avg'))}
+        />
         <MetricTable
           yearData={yearData}
           rows={rows}
@@ -2596,13 +2603,17 @@ function TransactionsTab({ yearData, updateMetric, allYears, activeYear }) {
   return (
     <div style={{ display: 'grid', gap: 16, gridTemplateColumns: 'minmax(0, 1fr)' }}>
       <Card accent={C.primary}>
-        <TabTitle title="Transactions" accent={C.amber} />
+        <TabTitle
+          title="Transactions"
+          accent={C.amber}
+          onDownload={() => downloadTextFile(`sorted-transactions-${activeYear}.csv`, metricRowsToCsv(rows, yearData, 'YTD'))}
+        />
         <MetricTable
           yearData={yearData}
           rows={rows}
           updateMetric={updateMetric}
           fixedMonths
-          emptyNote={`Transactions weren't tracked in ${activeYear}`}
+          emptyNote={activeYear === 2023 ? "Transactions weren't tracked in 2023" : null}
         />
       </Card>
       <ChartCard title="Transaction Volume by Category" accent={C.amber}>
@@ -2794,12 +2805,22 @@ function SubTabBar({ tabs, active, onChange }) {
   );
 }
 
-function CardsTab({ yearData, updateMetric, allYears, activeYear, cardBatches, cardCountryUsers, cardLifetimeUniqueUsers, updateRoot }) {
+function CardsTab({ yearData, updateMetric, allYears, activeYear, cardBatches, cardCountryUsers, updateRoot }) {
   const [sub, setSub] = useState('By Month');
+  // Export the currently-active sub-tab's table as CSV (raw values).
+  const onDownload = () => {
+    if (sub === 'By Country') {
+      downloadTextFile(`sorted-cards-by-country-${activeYear}.csv`, cardsByCountryCsv(cardBatches, cardCountryUsers));
+    } else if (sub === 'By Batch') {
+      downloadTextFile(`sorted-cards-by-batch-${activeYear}.csv`, cardsByBatchCsv(cardBatches));
+    } else {
+      downloadTextFile(`sorted-cards-by-month-${activeYear}.csv`, cardsByMonthCsv(yearData));
+    }
+  };
   return (
     <div style={{ display: 'grid', gap: 16, gridTemplateColumns: 'minmax(0, 1fr)' }}>
       <Card>
-        <TabTitle title="Top-up Cards" />
+        <TabTitle title="Top-up Cards" onDownload={onDownload} />
         <SubTabBar tabs={['By Month', 'By Country', 'By Batch']} active={sub} onChange={setSub} />
       </Card>
       {sub === 'By Month' && (
@@ -2808,8 +2829,7 @@ function CardsTab({ yearData, updateMetric, allYears, activeYear, cardBatches, c
           updateMetric={updateMetric}
           allYears={allYears}
           activeYear={activeYear}
-          cardLifetimeUniqueUsers={cardLifetimeUniqueUsers}
-          updateRoot={updateRoot}
+          cardCountryUsers={cardCountryUsers}
         />
       )}
       {sub === 'By Country' && (
@@ -2824,7 +2844,7 @@ function CardsTab({ yearData, updateMetric, allYears, activeYear, cardBatches, c
 
 // Sub-tab 1 — Monthly. The existing manual monthly card-activity table, the
 // Lifetime strip, and the monthly activity chart. Unchanged logic.
-function CardsMonthlyView({ yearData, updateMetric, allYears, activeYear, cardLifetimeUniqueUsers, updateRoot }) {
+function CardsMonthlyView({ yearData, updateMetric, allYears, activeYear, cardCountryUsers }) {
   const latest = latestMonthIndex(yearData);
   const sold = rawSeries(yearData, 'c_sold');
   const cardsVolume = rawSeries(yearData, 'c_valueDistributed');
@@ -2849,11 +2869,33 @@ function CardsMonthlyView({ yearData, updateMetric, allYears, activeYear, cardLi
   const netRevY = seriesSum(netRevenue, latest);
 
   // Lifetime = all-time, the same figure in every year view (summed across ALL
-  // years, not just up to the active one). Total Unique Users is a single manual
-  // figure stored at the ROOT (not per-year) so it shows in every year too.
+  // years, not just up to the active one).
   const lifeSoldTotal = allYearsTotal(allYears, ['c_sold']);
   const lifeVolTotal = allYearsTotal(allYears, ['c_valueDistributed']);
-  const lifeUsersTotal = isNum(cardLifetimeUniqueUsers) ? cardLifetimeUniqueUsers : null;
+  // Total Unique Users derives from the per-country deduplicated figures entered
+  // on the By Country tab (Kenya + Nigeria + Tanzania) — assumes negligible
+  // cross-country overlap (distinct markets; within-country dedup is manual).
+  const lifeUsersTotal = (() => {
+    let t = 0;
+    let any = false;
+    for (const c of CARD_COUNTRIES) {
+      const v = cardCountryUsers && cardCountryUsers[c];
+      if (isNum(v)) {
+        t += v;
+        any = true;
+      }
+    }
+    return any ? t : null;
+  })();
+  // Lifetime CAC = lifetime Cost of Sales ÷ lifetime Unique Users, where
+  // lifetime Cost of Sales = all-time Cards Volume − all-time Funds Collected.
+  const lifeFundsTotal = allYearsTotal(allYears, ['c_fundsCollected']);
+  const lifeCostOfSales =
+    lifeVolTotal == null && lifeFundsTotal == null ? null : (lifeVolTotal || 0) - (lifeFundsTotal || 0);
+  const lifeCac =
+    lifeCostOfSales != null && isNum(lifeUsersTotal) && lifeUsersTotal !== 0
+      ? lifeCostOfSales / lifeUsersTotal
+      : null;
 
   const rows = [
     { kind: 'subhead', label: 'Card Activity' },
@@ -2934,13 +2976,17 @@ function CardsMonthlyView({ yearData, updateMetric, allYears, activeYear, cardLi
         calculated={[
           { label: 'Total Cards Sold', value: lifeSoldTotal == null ? DASH : fmtNumber(lifeSoldTotal) },
           { label: 'Total Cards Volume', value: fmtByUnit(lifeVolTotal, 'usdt') },
+          {
+            label: 'Total Unique Users',
+            value: lifeUsersTotal == null ? DASH : fmtNumber(lifeUsersTotal),
+            info: 'Sum of the per-country deduplicated unique users entered on the By Country tab. Assumes negligible cross-country overlap.',
+          },
+          {
+            label: 'Lifetime CAC',
+            value: fmtByUnit(lifeCac, 'ratio'),
+            info: 'Lifetime Cost of Sales (all-time Cards Volume − Funds Collected) ÷ lifetime Unique Users.',
+          },
         ]}
-        manual={{
-          label: 'Total Unique Users',
-          value: lifeUsersTotal,
-          onCommit: (v) => updateRoot('cardLifetimeUniqueUsers', v),
-          info: 'A deduplicated all-time count of unique card users. Entered manually — it cannot be summed from the monthly Unique Users figures.',
-        }}
       />
       <Card style={{ padding: '10px 22px' }}>
         <MetricTable
@@ -3014,7 +3060,7 @@ function CardsMonthlyView({ yearData, updateMetric, allYears, activeYear, cardLi
 
 // Lifetime — three single all-time figures shown as compact stat cells (not a
 // month grid). Two are calculated running totals; the third is a manual entry.
-function LifetimeSummary({ calculated, manual }) {
+function LifetimeSummary({ calculated }) {
   const cellStyle = {
     flex: '1 1 0',
     minWidth: 160,
@@ -3051,30 +3097,13 @@ function LifetimeSummary({ calculated, manual }) {
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
         {calculated.map((it) => (
           <div key={it.label} style={cellStyle}>
-            <div style={labelStyle}>{it.label}</div>
+            <div style={labelStyle}>
+              {it.label}
+              {it.info && <InfoTip text={it.info} />}
+            </div>
             <div style={valueStyle}>{it.value}</div>
           </div>
         ))}
-        <div style={cellStyle}>
-          <div style={labelStyle}>
-            {manual.label}
-            {manual.info && <InfoTip text={manual.info} />}
-          </div>
-          <div style={{ marginTop: 6 }}>
-            <Cell
-              value={manual.value}
-              unit="count"
-              onCommit={manual.onCommit}
-              inputStyle={{
-                fontFamily: 'var(--font-head)',
-                fontSize: 28,
-                fontWeight: 700,
-                textAlign: 'left',
-                padding: 0,
-              }}
-            />
-          </div>
-        </div>
       </div>
     </div>
   );
@@ -3569,7 +3598,7 @@ function EmptyChart() {
 // ─────────────────────────────────────────────────────────────────────────────
 // Revenue tab
 // ─────────────────────────────────────────────────────────────────────────────
-function RevenueTab({ yearData, updateMetric }) {
+function RevenueTab({ yearData, updateMetric, activeYear }) {
   const latest = latestMonthIndex(yearData);
   // Top-up card fee revenue is pulled from the Top-up Cards tab, not entered.
   const topupRev = rawSeries(yearData, 'c_grossRevenue');
@@ -3622,7 +3651,11 @@ function RevenueTab({ yearData, updateMetric }) {
   return (
     <div style={{ display: 'grid', gap: 16, gridTemplateColumns: 'minmax(0, 1fr)' }}>
       <Card accent={C.primary}>
-        <TabTitle title="Costs & Revenue" accent={C.green} />
+        <TabTitle
+          title="Costs & Revenue"
+          accent={C.green}
+          onDownload={() => downloadTextFile(`sorted-costs-revenue-${activeYear}.csv`, metricRowsToCsv(rows, yearData, 'YTD'))}
+        />
         <MetricTable
           yearData={yearData}
           rows={rows}
@@ -3731,7 +3764,7 @@ function TextCell({ value, placeholder, onCommit, bold }) {
   );
 }
 
-function CampaignsTab({ yearData, updateYearField }) {
+function CampaignsTab({ yearData, updateYearField, activeYear }) {
   const editable = useContext(EditableContext);
   const campaigns = Array.isArray(yearData.campaigns) ? yearData.campaigns : [];
   const kpis = yearData.campaignKpis || {};
@@ -3768,7 +3801,12 @@ function CampaignsTab({ yearData, updateYearField }) {
   return (
     <div style={{ display: 'grid', gap: 16, gridTemplateColumns: 'minmax(0, 1fr)' }}>
       <Card accent={C.primary}>
-        <TabTitle title="Campaigns" accent={C.blue} downloadLabel="Download all" />
+        <TabTitle
+          title="Campaigns"
+          accent={C.blue}
+          downloadLabel="Download all"
+          onDownload={() => downloadTextFile(`sorted-campaigns-${activeYear}.csv`, campaignsCsv(yearData))}
+        />
         <p style={{ fontSize: 13, color: C.muted, marginTop: -4, marginBottom: 16 }}>
           Acquisition campaigns and performance. All figures are entered manually
           for now — attribution and computed CPI come in a later phase.
@@ -3953,12 +3991,193 @@ function CampaignsTab({ yearData, updateYearField }) {
 // for a later phase. The button is rendered (disabled) so the placement and
 // data wiring are in place; hook up `onClick` when the feature is built.
 // ─────────────────────────────────────────────────────────────────────────────
-function DownloadButton({ label = 'Download' }) {
+// ─────────────────────────────────────────────────────────────────────────────
+// Export helpers — CSV for the data tables (raw/full-precision values, not the
+// abbreviated display strings) and a print-to-PDF for the Dashboard. Available
+// to every role (download is not gated by canEdit).
+// ─────────────────────────────────────────────────────────────────────────────
+function csvCell(v) {
+  if (v == null) return '';
+  const s = String(v);
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+function toCsv(rows) {
+  return rows.map((r) => r.map(csvCell).join(',')).join('\n');
+}
+function downloadTextFile(filename, text, mime = 'text/csv;charset=utf-8') {
+  const blob = new Blob([text], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+// Generic MetricTable export: one row per metric (raw month values + the
+// summary/YTD), section subheads on their own line. Mirrors how MetricTable
+// resolves each row so the CSV matches what's on screen.
+function metricRowsToCsv(rows, yearData, totalLabel) {
+  const latest = latestMonthIndex(yearData);
+  const out = [['Metric', ...MONTHS, totalLabel || 'YTD']];
+  for (const row of rows) {
+    if (row.kind === 'subhead') {
+      out.push([row.label]);
+      continue;
+    }
+    let months;
+    let ytd;
+    if (row.kind === 'input') {
+      const s = rawSeries(yearData, row.key);
+      months = IDX.map((i) => s[i]);
+      const mode = row.ytd || 'sum';
+      ytd =
+        latest < 0 || mode === 'none'
+          ? null
+          : mode === 'last'
+          ? getVal(yearData, row.key, latest)
+          : mode === 'avg'
+          ? seriesAvg(s)
+          : seriesSum(s, latest);
+    } else if (row.kind === 'readonly') {
+      months = IDX.map((i) => row.values[i]);
+      ytd = latest < 0 ? null : seriesSum(row.values, latest);
+    } else {
+      months = IDX.map((i) => row.values[i]);
+      ytd = row.blankTotal ? null : row.ytd;
+    }
+    out.push([row.label, ...months, ytd]);
+  }
+  return toCsv(out);
+}
+
+// Cards › By Month — recomputes the same 8 metric rows for export.
+function cardsByMonthCsv(yearData) {
+  const sold = rawSeries(yearData, 'c_sold');
+  const vol = rawSeries(yearData, 'c_valueDistributed');
+  const funds = rawSeries(yearData, 'c_fundsCollected');
+  const gross = rawSeries(yearData, 'c_grossRevenue');
+  const users = rawSeries(yearData, 'c_uniqueUsers');
+  const cost = diffSeries(vol, funds);
+  const cac = ratioSeries(cost, users);
+  const net = IDX.map((i) => (gross[i] == null ? null : gross[i] - (cost[i] || 0)));
+  const latest = latestMonthIndex(yearData);
+  const sum = (s) => seriesSum(s, latest);
+  const volY = sum(vol);
+  const fundsY = sum(funds);
+  const costY = volY == null && fundsY == null ? null : (volY || 0) - (fundsY || 0);
+  const defs = [
+    ['Cards Sold', sold, sum(sold)],
+    ['Cards Volume', vol, volY],
+    ['Funds Collected', funds, fundsY],
+    ['Cost of Sales', cost, costY],
+    ['Unique Users', users, null],
+    ['CAC', cac, null],
+    ['Gross Revenue', gross, sum(gross)],
+    ['Net Revenue', net, sum(net)],
+  ];
+  const out = [['Metric', ...MONTHS, 'YTD']];
+  for (const [label, s, ytd] of defs) out.push([label, ...IDX.map((i) => s[i]), ytd]);
+  return toCsv(out);
+}
+
+// Cards › By Country — per-country summary + a Total row.
+function cardsByCountryCsv(batches, countryUsers) {
+  const out = [
+    ['Country', 'Cards Sold', 'Cards Volume', 'Discounts & Fees', 'Avg Discount %', 'Unique Users', 'CAC', 'Revenue'],
+  ];
+  const t = { cards: 0, volume: 0, discounts: 0, users: 0, anyUser: false, revenue: 0, anyBatch: false };
+  for (const c of CARD_COUNTRIES) {
+    const s = cardCountrySummary(c, batches, countryUsers[c]);
+    const empty = s.count === 0;
+    out.push([
+      c,
+      empty ? null : s.cards,
+      empty ? null : s.volume,
+      empty ? null : s.discounts,
+      empty ? null : s.avgDisc,
+      empty ? null : s.users,
+      empty ? null : s.cac,
+      empty || !(s.revenue > 0) ? null : s.revenue,
+    ]);
+    t.cards += s.cards;
+    t.volume += s.volume;
+    t.discounts += s.discounts;
+    t.revenue += s.revenue;
+    if (s.count > 0) t.anyBatch = true;
+    if (isNum(s.users)) {
+      t.users += s.users;
+      t.anyUser = true;
+    }
+  }
+  const totalAvg = t.volume !== 0 ? (t.discounts / t.volume) * 100 : null;
+  const totalCac = t.anyUser && t.users !== 0 ? t.discounts / t.users : null;
+  out.push([
+    'Total',
+    t.anyBatch ? t.cards : null,
+    t.anyBatch ? t.volume : null,
+    t.anyBatch ? t.discounts : null,
+    totalAvg,
+    t.anyUser ? t.users : null,
+    totalCac,
+    t.revenue > 0 ? t.revenue : null,
+  ]);
+  return toCsv(out);
+}
+
+// Cards › By Batch — one row per batch (sorted by country then batch number).
+function cardsByBatchCsv(batches) {
+  const out = [
+    ['Country', 'Batch', 'Cards', 'Cards Volume', 'Funds Collected', 'Discounts & Fees', 'Avg Discount %', 'Unique Users', 'CAC', 'Revenue'],
+  ];
+  const sorted = [...batches].sort((a, b) =>
+    a.country === b.country ? num0(a.batchNo) - num0(b.batchNo) : String(a.country).localeCompare(String(b.country))
+  );
+  for (const b of sorted) {
+    out.push([
+      b.country,
+      b.batchNo,
+      b.cards,
+      b.fundsSent,
+      b.fundsReceived,
+      batchDiscounts(b),
+      batchAvgDisc(b),
+      b.uniqueUsers,
+      batchCac(b),
+      b.revenue,
+    ]);
+  }
+  return toCsv(out);
+}
+
+// Campaigns — the manual KPI strip plus the campaign list.
+function campaignsCsv(yearData) {
+  const kpis = yearData.campaignKpis || {};
+  const campaigns = Array.isArray(yearData.campaigns) ? yearData.campaigns : [];
+  const out = [
+    ['Campaign KPIs'],
+    ['Active Campaigns', kpis.active],
+    ['Total Spend', kpis.spend],
+    ['Attributed Installs', kpis.installs],
+    ['Blended CPI', kpis.cpi],
+    [],
+    ['Campaign', 'Channel', 'Status', 'Spend', 'Installs', 'CPI', 'Conversion'],
+  ];
+  for (const c of campaigns) out.push([c.name, c.channel, c.status, c.spend, c.installs, c.cpi, c.conv]);
+  return toCsv(out);
+}
+
+function DownloadButton({ label = 'Download', onClick }) {
+  const disabled = !onClick;
   return (
     <button
       type="button"
-      disabled
-      title="Export — coming in a later phase"
+      data-no-print=""
+      disabled={disabled}
+      onClick={onClick}
+      title={disabled ? 'Export — coming in a later phase' : 'Export'}
       style={{
         border: `1px solid ${C.border}`,
         background: '#fff',
@@ -3966,8 +4185,8 @@ function DownloadButton({ label = 'Download' }) {
         padding: '6px 12px',
         fontSize: 12,
         fontWeight: 600,
-        color: C.muted,
-        cursor: 'not-allowed',
+        color: disabled ? C.muted : C.primary,
+        cursor: disabled ? 'not-allowed' : 'pointer',
         whiteSpace: 'nowrap',
       }}
     >
@@ -3976,7 +4195,7 @@ function DownloadButton({ label = 'Download' }) {
   );
 }
 
-function TabTitle({ title, accent, downloadLabel }) {
+function TabTitle({ title, accent, downloadLabel, onDownload }) {
   return (
     <div
       style={{
@@ -3988,7 +4207,7 @@ function TabTitle({ title, accent, downloadLabel }) {
     >
       <h2 style={{ fontSize: 18 }}>{title}</h2>
       <div style={{ flex: 1 }} />
-      <DownloadButton label={downloadLabel || 'Download'} />
+      <DownloadButton label={downloadLabel || 'Download'} onClick={onDownload} />
     </div>
   );
 }
@@ -4424,9 +4643,28 @@ function DashboardTab({ allYears }) {
     background: '#fff',
   };
 
+  // Print-to-PDF the whole Dashboard view. We set document.title so the browser's
+  // "Save as PDF" suggests a meaningful filename, and rely on the @media print
+  // rules (index.css) to drop the top nav / buttons from the capture.
+  const exportPdf = () => {
+    const prev = document.title;
+    document.title = `sorted-dashboard-${chartYear}`;
+    const restore = () => {
+      document.title = prev;
+      window.removeEventListener('afterprint', restore);
+    };
+    window.addEventListener('afterprint', restore);
+    window.print();
+    setTimeout(restore, 1000); // fallback if afterprint doesn't fire
+  };
+
   return (
     <div style={{ display: 'grid', gap: 14 }}>
-      <h2 style={{ fontFamily: 'var(--font-head)', fontWeight: 600, fontSize: 22, margin: 0 }}>Overview</h2>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <h2 style={{ fontFamily: 'var(--font-head)', fontWeight: 600, fontSize: 22, margin: 0 }}>Overview</h2>
+        <div style={{ flex: 1 }} />
+        <DownloadButton label="Download PDF" onClick={exportPdf} />
+      </div>
 
       {/* Date-range control: preset pills + a single collapsible Custom range. */}
       <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
@@ -4638,7 +4876,6 @@ function TabContent({
   updateRoot,
   cardBatches,
   cardCountryUsers,
-  cardLifetimeUniqueUsers,
   allYears,
 }) {
   const common = { yearData, activeYear, updateMetric, updateNote, allYears };
@@ -4655,14 +4892,13 @@ function TabContent({
           {...common}
           cardBatches={cardBatches}
           cardCountryUsers={cardCountryUsers}
-          cardLifetimeUniqueUsers={cardLifetimeUniqueUsers}
           updateRoot={updateRoot}
         />
       );
     case 'Costs & Revenue':
       return <RevenueTab {...common} />;
     case 'Campaigns':
-      return <CampaignsTab yearData={yearData} updateYearField={updateYearField} />;
+      return <CampaignsTab yearData={yearData} updateYearField={updateYearField} activeYear={activeYear} />;
     case 'Settings':
       return <SettingsTab user={user} setUser={setUser} canEdit={canEdit} />;
     case 'Dashboard':

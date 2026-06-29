@@ -308,16 +308,11 @@ export function normaliseData(data) {
     ? safe.cardBatches.filter((b) => b && typeof b === 'object')
     : [];
   // Manual deduplicated unique-users per country (cannot be summed from batches).
+  // The Cards lifetime "Total Unique Users" is derived as the sum of these.
   out.cardCountryUsers =
     safe.cardCountryUsers && typeof safe.cardCountryUsers === 'object'
       ? { ...safe.cardCountryUsers }
       : {};
-  // All-time deduplicated unique card users — a single lifetime figure entered
-  // manually. ROOT-level (not per-year) so it's the same in every year view.
-  out.cardLifetimeUniqueUsers =
-    typeof safe.cardLifetimeUniqueUsers === 'number' && Number.isFinite(safe.cardLifetimeUniqueUsers)
-      ? safe.cardLifetimeUniqueUsers
-      : null;
   return out;
 }
 
