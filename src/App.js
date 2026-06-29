@@ -4224,16 +4224,41 @@ const DASH_KPI_LABEL = {
   color: C.muted,
 };
 
-// Small ▲/▼ delta token. Up is "good" (green) for every dashboard metric here;
-// down is red. `none` renders a muted dash when there's nothing to compare to.
+// Small group label above each KPI band so the timeframe (lifetime vs the
+// selected window) is unmistakable.
+const BAND_LABEL = {
+  fontSize: 11.5,
+  fontWeight: 700,
+  letterSpacing: '0.7px',
+  textTransform: 'uppercase',
+  color: C.muted,
+  paddingLeft: 2,
+};
+
+// Shared plain card shell for the dashboard charts (1px border + soft shadow,
+// no accent edge).
+const DASH_CHART_SHELL = {
+  background: C.card,
+  border: `1px solid ${CARD_BORDER}`,
+  borderRadius: 18,
+  boxShadow: CARD_SHADOW,
+  padding: '20px 24px',
+};
+
+// Small ▲/▼ delta token. The ARROW points the literal direction of change; the
+// COLOUR follows whether that move is good or bad (`delta.good`). For most
+// metrics up = good, but for cost-like metrics (Marketing Spend, CAC) a fall is
+// good — so a falling cost reads green and a rising CAC reads red. Falls back to
+// up=good when `good` isn't supplied. `none` renders nothing.
 function DeltaToken({ delta, size = 12 }) {
   if (!delta || delta.dir === 'none' || !delta.text) return null;
+  const good = delta.good != null ? delta.good : delta.dir === 'up';
   return (
     <span
       style={{
         fontSize: size,
         fontWeight: 700,
-        color: delta.dir === 'up' ? C.green : C.red,
+        color: good ? C.green : C.red,
         whiteSpace: 'nowrap',
       }}
     >
@@ -4476,7 +4501,12 @@ function buildPresetRanges(allYears) {
 function DashboardTab({ allYears }) {
   const storeKeys = STORE_KEYS.map((s) => s[0]);
   const countKeys = ['tx_sendP2P', 'tx_receiveP2P', 'tx_cashOut', 'tx_cardRedemption', 'tx_other'];
+  const valueKeys = ['tx_sendVolume', 'tx_receiveVolume', 'tx_cashOutVolume', 'tx_cardRedemptionVolume', 'tx_otherVolume'];
   const revKeys = ['c_grossRevenue', 'r_offramps', 'r_other'];
+  const costKeys = ['cost_ambassador', 'cost_saas', 'cost_digitalMarketing', 'cost_campaigns'];
+  // Marketing/acquisition spend (cost-like: down is good). Distinct keys, so no
+  // double counting against the Costs tab's ambassador line.
+  const marketingKeys = ['dl_ambassadorCosts', 'dl_paidCampaignSpend', 'cost_digitalMarketing', 'cost_campaigns'];
 
   const presets = useMemo(() => buildPresetRanges(allYears), [allYears]);
   const defaultPeriod = useMemo(() => latestCompletedPeriod(allYears), [allYears]);
@@ -4546,21 +4576,38 @@ function DashboardTab({ allYears }) {
       const pd = sumKeysOver(allYears, def.den, compPeriods);
       return [isPct ? pct(cn, cd) : safeDiv(cn, cd), isPct ? pct(pn, pd) : safeDiv(pn, pd)];
     }
+    if (def.type === 'diffratio') {
+      // (Σplus − Σminus) ÷ Σden — e.g. card CAC = (Volume − Funds) ÷ Unique Users.
+      const calc = (ps) =>
+        safeDiv(
+          (sumKeysOver(allYears, def.plus, ps) || 0) - (sumKeysOver(allYears, def.minus, ps) || 0),
+          sumKeysOver(allYears, def.den, ps)
+        );
+      return [calc(periods), calc(compPeriods)];
+    }
     return [pointInTimeOver(allYears, def.key, periods), pointInTimeOver(allYears, def.key, compPeriods)];
   };
 
   // Delta vs the comparison window. Percentage metrics report points (pp);
-  // everything else reports relative %. Up is "good" for all dashboard metrics.
+  // everything else reports relative %. The arrow is the literal direction; the
+  // colour follows good/bad via def.goodDir ('up' default, 'down' for costs).
   const deltaOf = (def, cur, prev) => {
     if (cur == null || prev == null) return { dir: 'none', text: null };
     const isPP = def.unit === 'percent' || def.unit === 'percent2';
+    let up;
+    let text;
     if (isPP) {
       const d = cur - prev;
-      return { dir: d >= 0 ? 'up' : 'down', text: `${d >= 0 ? '▲' : '▼'} ${Math.abs(d).toFixed(1)}pp` };
+      up = d >= 0;
+      text = `${up ? '▲' : '▼'} ${Math.abs(d).toFixed(1)}pp`;
+    } else {
+      if (prev === 0) return { dir: 'none', text: null };
+      const d = ((cur - prev) / Math.abs(prev)) * 100;
+      up = d >= 0;
+      text = `${up ? '▲' : '▼'} ${Math.abs(d).toFixed(1)}%`;
     }
-    if (prev === 0) return { dir: 'none', text: null };
-    const d = ((cur - prev) / Math.abs(prev)) * 100;
-    return { dir: d >= 0 ? 'up' : 'down', text: `${d >= 0 ? '▲' : '▼'} ${Math.abs(d).toFixed(1)}%` };
+    const good = def.goodDir === 'down' ? !up : up;
+    return { dir: up ? 'up' : 'down', good, text };
   };
 
   const comparePhrase = range ? 'previous period' : 'last month';
@@ -4570,21 +4617,50 @@ function DashboardTab({ allYears }) {
     return { label: def.label, value: fmtByUnit(cur, def.unit), delta: deltaOf(def, cur, prev), compare };
   };
 
-  // Hero = our cumulative headline totals. The supporting strip is one row of
-  // four metrics that don't simply duplicate the hero under the All Time default.
+  // Three question-driven bands. Row 1 = lifetime headline scale (hero); rows 2
+  // and 3 = the selected window (default: latest completed month), MoM-style.
   const heroDefs = [
     { label: 'Total Installs', type: 'lifetime', keys: storeKeys, unit: 'count' },
     { label: 'Total Users', type: 'lifetime', keys: ['u_newUsers'], unit: 'count' },
-    { label: 'Total Top-up Cards Sold', type: 'lifetime', keys: ['c_sold'], unit: 'count' },
+    {
+      label: (
+        <>
+          Total Cards Volume <span style={{ color: C.gray400, fontWeight: 600 }}>USDT</span>
+        </>
+      ),
+      type: 'lifetime',
+      keys: ['c_valueDistributed'],
+      unit: 'usdt',
+    },
   ];
-  const secondaryDefs = [
-    { label: 'Transactions', type: 'additive', keys: countKeys, unit: 'count' },
-    { label: 'Revenue', type: 'additive', keys: revKeys, unit: 'usd' },
+  const engagementDefs = [
     { label: 'Install → User Conversion', type: 'ratio', num: ['u_newUsers'], den: storeKeys, unit: 'percent2' },
+    { label: 'Transaction Count', type: 'additive', keys: countKeys, unit: 'count' },
+    { label: 'Transaction Volume (USDT)', type: 'additive', keys: valueKeys, unit: 'usdt' },
     { label: 'MAU', type: 'point', key: 'u_mau', unit: 'count' },
   ];
+  const economicsDefs = [
+    { label: 'Total Revenue', type: 'additive', keys: revKeys, unit: 'usd' },
+    { label: 'Marketing Spend', type: 'additive', keys: marketingKeys, unit: 'usd', goodDir: 'down' },
+    {
+      label: 'CAC · Top-up Cards',
+      type: 'diffratio',
+      plus: ['c_valueDistributed'],
+      minus: ['c_fundsCollected'],
+      den: ['c_uniqueUsers'],
+      unit: 'ratio',
+      goodDir: 'down',
+    },
+  ];
   const heroMetrics = heroDefs.map((d) => buildMetric(d, true));
-  const secondaryMetrics = secondaryDefs.map((d) => buildMetric(d, false));
+  const engagementMetrics = engagementDefs.map((d) => buildMetric(d, false));
+  const economicsMetrics = economicsDefs.map((d) => buildMetric(d, false));
+
+  // Window label so the two timeframes are unmistakable (single month vs range).
+  const windowLabel =
+    periodCount === 1
+      ? `This month · ${fmtPeriod(periods[0])}`
+      : `Selected range · ${fmtPeriod(periods[0])} – ${fmtPeriod(periods[periods.length - 1])}`;
 
   // Combined trend chart: a 12-month calendar year, solid through the latest
   // reported month then a softly-shaded "upcoming" band with dashed lines.
@@ -4620,6 +4696,21 @@ function DashboardTab({ allYears }) {
       </text>
     );
   };
+
+  // Chart 2 — Revenue vs Cost grouped bars (reported months only).
+  const revByMonth = IDX.map((i) => sumKeysAt(allYears, revKeys, { y: chartYear, m: i }));
+  const costByMonth = IDX.map((i) => sumKeysAt(allYears, costKeys, { y: chartYear, m: i }));
+  const revCostData = IDX.map((i) => ({
+    m: MONTHS[i],
+    Revenue: reported >= 0 && i <= reported ? revByMonth[i] : null,
+    Cost: reported >= 0 && i <= reported ? costByMonth[i] : null,
+  }));
+  // Chart 3 — Transaction Volume (USDT) monthly trend (reported months only).
+  const txVolByMonth = IDX.map((i) => sumKeysAt(allYears, valueKeys, { y: chartYear, m: i }));
+  const txVolData = IDX.map((i) => ({
+    m: MONTHS[i],
+    Volume: reported >= 0 && i <= reported ? txVolByMonth[i] : null,
+  }));
 
   const pillStyle = (active) => ({
     border: `1px solid ${active ? C.primary : C.border}`,
@@ -4739,32 +4830,48 @@ function DashboardTab({ allYears }) {
         <DownloadButton label="Download all" />
       </div>
 
-      {/* Hero row — large headline totals in one card */}
-      <div
-        style={{
-          background: C.card,
-          border: `1px solid ${CARD_BORDER}`,
-          borderRadius: 18,
-          boxShadow: CARD_SHADOW,
-          overflow: 'hidden',
-          display: 'grid',
-          gridTemplateColumns: 'repeat(3, 1fr)',
-        }}
-      >
-        {heroMetrics.map((m, i) => (
-          <HeroMetric key={m.label} {...m} divider={i < heroMetrics.length - 1} />
-        ))}
+      {/* ── ROW 1 · Lifetime headline scale (hero) ───────────────────────── */}
+      <div style={{ display: 'grid', gap: 8 }}>
+        <div style={BAND_LABEL}>Lifetime · all-time scale</div>
+        <div
+          style={{
+            background: C.card,
+            border: `1px solid ${CARD_BORDER}`,
+            borderRadius: 18,
+            boxShadow: CARD_SHADOW,
+            overflow: 'hidden',
+            display: 'grid',
+            gridTemplateColumns: 'repeat(3, 1fr)',
+          }}
+        >
+          {heroMetrics.map((m, i) => (
+            <HeroMetric key={i} {...m} divider={i < heroMetrics.length - 1} />
+          ))}
+        </div>
       </div>
 
-      {/* Secondary strip — supporting metrics */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 14 }}>
-        {secondaryMetrics.map((m) => (
-          <StatCard key={m.label} {...m} />
-        ))}
+      {/* ── ROW 2 · Engagement (selected window) ─────────────────────────── */}
+      <div style={{ display: 'grid', gap: 8 }}>
+        <div style={BAND_LABEL}>{windowLabel} · engagement</div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 14 }}>
+          {engagementMetrics.map((m, i) => (
+            <StatCard key={i} {...m} />
+          ))}
+        </div>
       </div>
 
-      {/* Combined trend chart — anchors the page */}
-      <div style={{ background: C.card, border: `1px solid ${CARD_BORDER}`, borderRadius: 18, boxShadow: CARD_SHADOW, padding: '20px 24px' }}>
+      {/* ── ROW 3 · Economics (selected window) ──────────────────────────── */}
+      <div style={{ display: 'grid', gap: 8 }}>
+        <div style={BAND_LABEL}>{windowLabel} · economics</div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 14 }}>
+          {economicsMetrics.map((m, i) => (
+            <StatCard key={i} {...m} />
+          ))}
+        </div>
+      </div>
+
+      {/* ── Chart 1 · Installs & Active Users (full width) ───────────────── */}
+      <div style={DASH_CHART_SHELL}>
         <div
           style={{
             display: 'flex',
@@ -4857,6 +4964,69 @@ function DashboardTab({ allYears }) {
             </ComposedChart>
           </ResponsiveContainer>
         )}
+      </div>
+
+      {/* ── Charts 2 & 3 · Revenue vs Cost + Transaction Volume ──────────── */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 14 }}>
+        {/* Chart 2 · Revenue vs Cost — grouped bars by month */}
+        <div style={DASH_CHART_SHELL}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6, flexWrap: 'wrap', gap: 8 }}>
+            <h3 style={{ fontFamily: 'var(--font-head)', fontWeight: 600, fontSize: 16, margin: 0 }}>Revenue vs Cost</h3>
+            <div style={{ display: 'flex', gap: 16, fontSize: 11.5, color: C.muted }}>
+              <span>
+                <span style={{ color: C.primary }}>●</span> Revenue
+              </span>
+              <span>
+                <span style={{ color: '#F6CE8C' }}>●</span> Cost
+              </span>
+            </div>
+          </div>
+          {reported < 0 ? (
+            <EmptyChart />
+          ) : (
+            <ResponsiveContainer width="100%" height={250}>
+              <ComposedChart data={revCostData} margin={{ top: 6, right: 8, left: 0, bottom: 0 }}>
+                <CartesianGrid {...GRID} />
+                <XAxis dataKey="m" tickLine={false} axisLine={false} interval={0} tick={renderMonthTick} />
+                <YAxis {...yAxis()} />
+                <Tooltip content={(p) => <ChartTooltip {...p} fmt={(v) => withDollar(fmtNumber(v))} reported={reported} />} />
+                <Bar dataKey="Revenue" fill={C.primary} radius={[3, 3, 0, 0]} maxBarSize={18} />
+                <Bar dataKey="Cost" fill="#F6CE8C" radius={[3, 3, 0, 0]} maxBarSize={18} />
+              </ComposedChart>
+            </ResponsiveContainer>
+          )}
+        </div>
+
+        {/* Chart 3 · Transaction Volume — monthly USDT trend */}
+        <div style={DASH_CHART_SHELL}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6, flexWrap: 'wrap', gap: 8 }}>
+            <h3 style={{ fontFamily: 'var(--font-head)', fontWeight: 600, fontSize: 16, margin: 0 }}>
+              Transaction Volume <span style={{ color: C.gray400, fontWeight: 600, fontSize: 12 }}>USDT</span>
+            </h3>
+          </div>
+          {reported < 0 ? (
+            <EmptyChart />
+          ) : (
+            <ResponsiveContainer width="100%" height={250}>
+              <ComposedChart data={txVolData} margin={{ top: 6, right: 8, left: 0, bottom: 0 }}>
+                {gradient('dashTxVol', C.primary)}
+                <CartesianGrid {...GRID} />
+                <XAxis dataKey="m" tickLine={false} axisLine={false} interval={0} tick={renderMonthTick} />
+                <YAxis {...yAxis()} />
+                <Tooltip content={(p) => <ChartTooltip {...p} fmt={(v) => withDollar(fmtUSDT(v))} reported={reported} />} />
+                <Area
+                  type="monotone"
+                  dataKey="Volume"
+                  stroke={C.primary}
+                  strokeWidth={2.4}
+                  fill="url(#dashTxVol)"
+                  dot={false}
+                  connectNulls={false}
+                />
+              </ComposedChart>
+            </ResponsiveContainer>
+          )}
+        </div>
       </div>
     </div>
   );
