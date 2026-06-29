@@ -1188,7 +1188,7 @@ function Cell({ value, unit, onCommit, inputStyle, placeholder = DASH, compact =
           fontVariantNumeric: 'tabular-nums',
           color: C.text,
           // Match the computed text cells' inset so Member view aligns too.
-          padding: '8px 10px',
+          padding: '9px 12px',
           ...inputStyle,
         }}
       >
@@ -1273,7 +1273,9 @@ function Cell({ value, unit, onCommit, inputStyle, placeholder = DASH, compact =
         border: 'none',
         boxShadow: focused ? `inset 0 0 0 1.5px ${C.primary}` : 'none',
         borderRadius: 7,
-        padding: '8px 10px',
+        // Roomy inset (matches the computed text cells) so the right-aligned
+        // digits and caret never sit against the focus ring.
+        padding: '9px 12px',
         outline: 'none',
         ...inputStyle,
       }}
@@ -1712,7 +1714,7 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
                         row.preLaunchUntil != null && i < row.preLaunchUntil && !isNum(cellVal);
                       if (preLaunch) {
                         return (
-                          <td key={m} style={{ textAlign: 'right', padding: '8px 10px', color: '#d4d4da' }}>
+                          <td key={m} style={{ textAlign: 'right', padding: '9px 12px', color: '#d4d4da' }}>
                             –
                           </td>
                         );
@@ -1826,7 +1828,7 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
                             textAlign: 'right',
                             minWidth: fixedMonths ? undefined : REPORTED_MIN,
                             whiteSpace: 'nowrap',
-                            padding: '8px 10px',
+                            padding: '9px 12px',
                             fontSize: 13,
                             fontWeight: weight,
                             color: v == null ? C.gray400 : color,
@@ -1900,7 +1902,7 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
                         minWidth: fixedMonths ? undefined : REPORTED_MIN,
                         whiteSpace: 'nowrap',
                         fontSize: 13,
-                        padding: '8px 10px',
+                        padding: '9px 12px',
                         ...style,
                         // Banded month: the faint column tint sits over the calc
                         // row's blue fill (matches the reference's .up on .auto).
