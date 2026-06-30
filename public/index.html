@@ -8,6 +8,56 @@
       name="description"
       content="Sorted Wallet Metrics Tracker — internal monthly KPI dashboard"
     />
+    <!-- Preload the brand font (Outfit, self-hosted) so it is fetched before
+         first paint and applied immediately — no flash of fallback text. The
+         crossorigin attribute is required for font preloads to match the
+         CORS-mode fetch the browser uses for @font-face. -->
+    <link
+      rel="preload"
+      href="%PUBLIC_URL%/fonts/outfit-latin.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
+    <!-- @font-face lives here (not in the bundled CSS) so it is parsed in the
+         document head before first paint, and so the self-hosted /fonts URLs
+         are used verbatim (the bundler would otherwise try to resolve them).
+         Outfit from Google is a single variable woff2 per subset — one file
+         covers weights 400–700. Loads identically in dev and the prod build. -->
+    <style>
+      @font-face {
+        font-family: 'Outfit';
+        font-style: normal;
+        font-weight: 400 700;
+        font-display: swap;
+        src: url('%PUBLIC_URL%/fonts/outfit-latin.woff2') format('woff2');
+        unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6,
+          U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122,
+          U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+      }
+      @font-face {
+        font-family: 'Outfit';
+        font-style: normal;
+        font-weight: 400 700;
+        font-display: swap;
+        src: url('%PUBLIC_URL%/fonts/outfit-latin-ext.woff2') format('woff2');
+        unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7,
+          U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F,
+          U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F,
+          U+A720-A7FF;
+      }
+      /* Metrics-matched fallback: local Arial scaled to Outfit's metrics
+         (overrides derived from both fonts' real metrics) so the pre-swap
+         render occupies the same space as Outfit — no visible reflow on swap. */
+      @font-face {
+        font-family: 'Outfit Fallback';
+        src: local('Arial');
+        size-adjust: 99.40%;
+        ascent-override: 100.61%;
+        descent-override: 26.16%;
+        line-gap-override: 0%;
+      }
+    </style>
     <link rel="icon" type="image/png" href="%PUBLIC_URL%/favicon.png" />
     <link rel="apple-touch-icon" href="%PUBLIC_URL%/favicon.png" />
     <link rel="manifest" href="%PUBLIC_URL%/manifest.json" />

@@ -1,4 +1,7 @@
-@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&display=swap');
+/* Outfit (the brand face) is self-hosted and declared via @font-face in
+   public/index.html — in the document head, so it is parsed before this
+   stylesheet and applied from the first paint (the woff2 is also preloaded
+   there). See that file for the metric-override fallback details. */
 
 /* ── Design tokens ─────────────────────────────────────────── */
 :root {
@@ -33,9 +36,11 @@
   --text: var(--gray-900);
   --muted: var(--gray-600);
 
-  /* Outfit is the official brand face — used everywhere. */
-  --font-body: 'Outfit', system-ui, -apple-system, sans-serif;
-  --font-head: 'Outfit', system-ui, -apple-system, sans-serif;
+  /* Outfit is the official brand face — used everywhere. The metrics-matched
+     'Outfit Fallback' sits first in the fallback chain so the pre-swap render
+     matches Outfit's size; system faces follow for the rare no-Arial case. */
+  --font-body: 'Outfit', 'Outfit Fallback', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-head: 'Outfit', 'Outfit Fallback', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
 }
 
 /* ── Reset ─────────────────────────────────────────────────── */
