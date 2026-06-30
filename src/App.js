@@ -1667,7 +1667,7 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
               <th colSpan={2} />
               {fixedPreBand && (
                 <th colSpan={P} style={groupLabel(PRE_LABEL, PRE_LABEL_BG)}>
-                  Pre-launch
+                  {preLaunchLabel}
                 </th>
               )}
               {activeSpan > 0 && <th colSpan={activeSpan} />}
@@ -1740,6 +1740,7 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
                       }}
                     >
                       {row.label}
+                      {row.info && <InfoTip text={row.info} />}
                     </td>
                   </tr>
                 </React.Fragment>
@@ -2574,6 +2575,25 @@ function UsersTab({ yearData, updateMetric, activeYear }) {
 const TX_OTHER_INFO =
   'All other in-app activity outside the core flows, such as airtime top-ups, bill and utility payments, and other Market features.';
 
+// Transaction Volume is computed at current market prices, not the price at the
+// time of each historical transaction — flagged on the section header.
+const TX_VOLUME_INFO = 'Volume valued at market prices as of 30th June, 2026';
+
+// Transaction tracking began December 2023 — a fixed boundary (not data driven).
+// Months before it render as a "weren't tracked" band, mirroring the Cards
+// pre-launch band. Same concept as CARD_LAUNCH, tracking-start = Dec 2023.
+const TX_TRACKING_YEAR = 2023;
+const TX_TRACKING_MONTH = 11; // Dec, 0-based
+const TX_TRACKING_LABEL = "Weren't tracked";
+
+// How many leading months of `activeYear` pre-date tracking (0, up to the start
+// month, or the whole year).
+function txPreTrackingCols(activeYear) {
+  if (activeYear < TX_TRACKING_YEAR) return 12;
+  if (activeYear === TX_TRACKING_YEAR) return TX_TRACKING_MONTH;
+  return 0;
+}
+
 function TransactionsTab({ yearData, updateMetric, allYears, activeYear }) {
   const latest = latestMonthIndex(yearData);
   // tx_airtime is retired (folds into Other); kept in the model for old data.
@@ -2611,7 +2631,7 @@ function TransactionsTab({ yearData, updateMetric, allYears, activeYear }) {
       ...calc('Total Transactions', 'count', lifeTx, null, 'Cumulative number of transactions since we began tracking.'),
       blankTotal: true,
     },
-    { kind: 'subhead', label: 'Transaction Volume' },
+    { kind: 'subhead', label: 'Transaction Volume', info: TX_VOLUME_INFO },
     { kind: 'input', key: 'tx_sendVolume', label: 'Send', unit: 'usdt' },
     { kind: 'input', key: 'tx_receiveVolume', label: 'Receive', unit: 'usdt' },
     { kind: 'input', key: 'tx_cashOutVolume', label: 'Cash-Out', unit: 'usdt' },
@@ -2658,7 +2678,8 @@ function TransactionsTab({ yearData, updateMetric, allYears, activeYear }) {
           rows={rows}
           updateMetric={updateMetric}
           fixedMonths
-          emptyNote={activeYear === 2023 ? "Transactions weren't tracked in 2023" : null}
+          preLaunchCols={txPreTrackingCols(activeYear)}
+          preLaunchLabel={TX_TRACKING_LABEL}
         />
       </Card>
       <ChartCard title="Transaction Volume by Category" accent={C.amber}>
