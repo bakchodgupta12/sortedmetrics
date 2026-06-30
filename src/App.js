@@ -1023,6 +1023,25 @@ function withDollar(formatted) {
   return formatted.startsWith('-') ? `-$${formatted.slice(1)}` : `$${formatted}`;
 }
 
+// Render the fractional part of a formatted number one size smaller than the
+// integer part — a subtle, page-wide refinement so ".71" in "$852,619.71" or
+// ".84" in "13.84%" reads slightly smaller (same colour/weight). Returns the
+// original string when there's no decimal point. This is a RENDER helper (it
+// returns JSX); the plain-string formatters are untouched, so CSV exports, chart
+// tick/tooltip strings, and document.title keep their flat text.
+function withSmallDecimals(formatted) {
+  if (typeof formatted !== 'string') return formatted;
+  const m = formatted.match(/^(.*?)(\.\d+)(.*)$/);
+  if (!m) return formatted;
+  return (
+    <>
+      {m[1]}
+      <span style={{ fontSize: '0.8em' }}>{m[2]}</span>
+      {m[3]}
+    </>
+  );
+}
+
 function fmtByUnit(v, unit) {
   switch (unit) {
     case 'usdt':
@@ -1205,7 +1224,7 @@ function Cell({ value, unit, onCommit, inputStyle, placeholder = DASH, compact =
           ...inputStyle,
         }}
       >
-        {value == null ? placeholder : fmtRest(value)}
+        {value == null ? placeholder : withSmallDecimals(fmtRest(value))}
       </span>
     );
   }
@@ -1364,6 +1383,10 @@ function InfoTip({ text }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Metric table
 // ─────────────────────────────────────────────────────────────────────────────
+// Height of the sticky top nav — the data-table header pins just below it on
+// page scroll (1px under so no sliver shows through the gap).
+const STICKY_HEADER_TOP = 54;
+
 const thBase = {
   fontSize: 10,
   fontWeight: 500,
@@ -1462,7 +1485,9 @@ function heatCell(reportedNums, v) {
   const mx = Math.max(...reportedNums);
   const r = mx - mn || 1;
   const a = 0.12 + ((v - mn) / r) * 0.72;
-  return { background: `rgba(0,17,168,${a.toFixed(2)})`, color: a > 0.42 ? '#ffffff' : CURRENT_TEXT };
+  // Green ramp (brand success green): faint green for low values, saturated for
+  // high. Same shading logic, just green instead of the old blue.
+  return { background: `rgba(31,138,77,${a.toFixed(2)})`, color: a > 0.42 ? '#ffffff' : CURRENT_TEXT };
 }
 
 function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaunchCols = 0, preLaunchLabel = 'Pre-launch', tintCalc = true, fixedMonths = false, emptyNote = null }) {
@@ -1530,19 +1555,20 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
   const summaryCell = { textAlign: 'right', padding: '12px 16px', borderLeft: `1px solid ${C.border}`, whiteSpace: 'nowrap' };
   // Sticky-header additions for the scrollable fixed-grid layout: header cells
   // pin to the top of the scroll container as the rows scroll under them.
-  const headStick = fixedMonths ? { position: 'sticky', top: 0, zIndex: 2 } : null;
+  const headStick = fixedMonths ? { position: 'sticky', top: STICKY_HEADER_TOP, zIndex: 2 } : null;
   const summaryHead = { ...thBase, padding: '12px 16px', color: C.text, fontWeight: 700, borderLeft: `1px solid ${C.border}`, background: C.card, ...headStick };
 
   // Shared value-cell colour/weight. Ordinary computed rows render like detail
   // rows (no bold/blue); only `total` rows (calc rows on tables where tintCalc)
-  // get the heavier/brand treatment. Negatives are red by the cell's own sign;
-  // the current month is emphasised uniformly across all rows.
-  const valStyle = (v, current, total) => {
+  // get the heavier/brand treatment. The current month is emphasised uniformly.
+  // Negatives are red (bad) by default; on cost-type rows (negGood) a negative
+  // is GOOD — money recovered — so it reads green instead.
+  const valStyle = (v, current, total, negGood) => {
     let color;
     let weight = total ? 600 : 400;
     // Latest reported month: bold blue text (no fill) on the fixed grid.
     if (current) weight = total || fixedMonths ? 700 : 600;
-    if (isNum(v) && v < 0) color = DANGER;
+    if (isNum(v) && v < 0) color = negGood ? SUCCESS : DANGER;
     else if (current) color = fixedMonths || total ? C.primary : CURRENT_TEXT;
     else if (isNum(v) && v === 0) color = '#b0b0ba';
     else color = VALUE_TEXT;
@@ -1628,10 +1654,11 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
   }
 
   return (
-    // Long month-grid tables (fixedMonths) scroll inside their own container so
-    // the header row can stick to the top while the rows scroll under it. Other
-    // layouts keep simple horizontal overflow.
-    <div style={fixedMonths ? { maxHeight: 'calc(100vh - 150px)', overflow: 'auto' } : { overflowX: 'auto' }}>
+    // No inner scroll container: the page scrolls normally and the header row
+    // sticks (see headStick) as the rows pass under it. The fixed-grid layout is
+    // width:100% table-layout:fixed, so it never needs horizontal scroll; only
+    // the non-fixed layout keeps simple horizontal overflow.
+    <div style={fixedMonths ? undefined : { overflowX: 'auto' }}>
       <table
         style={{
           borderCollapse: 'collapse',
@@ -1693,7 +1720,7 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
                 padding: '12px 16px',
                 position: 'sticky',
                 left: 0,
-                top: fixedMonths ? 0 : undefined,
+                top: fixedMonths ? STICKY_HEADER_TOP : undefined,
                 background: C.card,
                 zIndex: fixedMonths ? 3 : 1,
               }}
@@ -1890,7 +1917,7 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
                       </td>
                     )}
                     <td style={{ ...summaryCell, fontSize: 13, fontWeight: 700, color: ytd == null ? C.gray400 : C.text }}>
-                      {row.ytd === 'none' ? '' : ytd == null ? DASH : fmtMoney(ytd, row.unit)}
+                      {row.ytd === 'none' ? '' : ytd == null ? DASH : withSmallDecimals(fmtMoney(ytd, row.unit))}
                     </td>
                   </tr>
                 </React.Fragment>
@@ -1943,13 +1970,13 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
                             background: colTint(i),
                           }}
                         >
-                          {v != null ? fmtMoney(v, row.unit) : isBanded(i) ? '' : DASH}
+                          {v != null ? withSmallDecimals(fmtMoney(v, row.unit)) : isBanded(i) ? '' : DASH}
                         </td>
                       );
                     })}
                     {hasUp && upBandCell}
                     <td style={{ ...summaryCell, fontSize: 13, fontWeight: 700, color: ytd == null ? C.gray400 : C.text }}>
-                      {ytd == null ? DASH : fmtMoney(ytd, row.unit)}
+                      {ytd == null ? DASH : withSmallDecimals(fmtMoney(ytd, row.unit))}
                     </td>
                   </tr>
                 </React.Fragment>
@@ -2002,7 +2029,7 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
                   if (heat) {
                     style = { color: heat.color, fontWeight: cur ? 700 : 600, background: heat.background };
                   } else {
-                    const s = valStyle(v, cur, isTotalRow);
+                    const s = valStyle(v, cur, isTotalRow, row.negGood);
                     style = { color: v == null ? C.gray400 : s.color, fontWeight: s.weight };
                   }
                   return (
@@ -2021,7 +2048,12 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
                         ...(isBanded(i) ? { background: colTint(i) } : null),
                       }}
                     >
-                      {v != null ? `${fmtMoney(v, row.unit)}${over100 ? '*' : ''}` : isBanded(i) ? '' : DASH}
+                      {v != null ? (
+                        <>
+                          {withSmallDecimals(fmtMoney(v, row.unit))}
+                          {over100 ? '*' : ''}
+                        </>
+                      ) : isBanded(i) ? '' : DASH}
                     </td>
                   );
                 })}
@@ -2032,10 +2064,10 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
                     fontSize: 13,
                     fontWeight: isTotalRow ? 800 : 700,
                     background: fixedMonths ? CALC_FILL : undefined,
-                    color: isNum(row.ytd) && row.ytd < 0 ? DANGER : row.ytd == null ? C.gray400 : C.text,
+                    color: isNum(row.ytd) && row.ytd < 0 ? (row.negGood ? SUCCESS : DANGER) : row.ytd == null ? C.gray400 : C.text,
                   }}
                 >
-                  {row.blankTotal ? '' : row.ytd == null ? DASH : fmtMoney(row.ytd, row.unit)}
+                  {row.blankTotal ? '' : row.ytd == null ? DASH : withSmallDecimals(fmtMoney(row.ytd, row.unit))}
                 </td>
               </tr>
             );
@@ -2106,7 +2138,7 @@ function ChartTooltip({ active, payload, label, fmt, reported }) {
       ) : (
         rows.map((p) => (
           <div key={p.dataKey} style={{ color: p.color || p.stroke }}>
-            {p.name}: {p.value == null ? DASH : f(p.value)}
+            {p.name}: {p.value == null ? DASH : withSmallDecimals(f(p.value))}
           </div>
         ))
       )}
@@ -2811,7 +2843,7 @@ function CardsActivityTooltip({ active, payload, label, reported }) {
       ) : (
         rows.map((p) => (
           <div key={p.dataKey} style={{ color: p.color || p.stroke }}>
-            {p.name}: {p.value == null ? DASH : p.dataKey === 'Cards / User' ? p.value.toFixed(2) : fmtNumber(p.value)}
+            {p.name}: {p.value == null ? DASH : withSmallDecimals(p.dataKey === 'Cards / User' ? p.value.toFixed(2) : fmtNumber(p.value))}
           </div>
         ))
       )}
@@ -3048,7 +3080,12 @@ function CardsMonthlyView({ yearData, updateMetric, allYears, activeYear, cardBa
       unit: 'usdt',
       info: 'The funds remitted back to Sorted by ambassadors and distributors.',
     },
-    calc('Cost of Sales', 'usdt', costOfSales, costOfSalesY, 'The costs involved in selling the top-up cards. Calculated as Cards Volume − Funds Collected.'),
+    {
+      // Cost metric: a negative Cost of Sales is GOOD (money recovered), so it
+      // reads green, not red.
+      ...calc('Cost of Sales', 'usdt', costOfSales, costOfSalesY, 'The costs involved in selling the top-up cards. Calculated as Cards Volume − Funds Collected.'),
+      negGood: true,
+    },
     {
       kind: 'input',
       key: 'c_uniqueUsers',
@@ -3067,6 +3104,8 @@ function CardsMonthlyView({ yearData, updateMetric, allYears, activeYear, cardBa
         'CAC per transacting user — customer acquisition cost per transacting card user this month. Calculated as Cost of Sales ÷ Unique Users.'
       ),
       blankTotal: true,
+      // Cost metric: a negative CAC is GOOD, so it reads green, not red.
+      negGood: true,
     },
     {
       kind: 'input',
@@ -3228,7 +3267,7 @@ function LifetimeSummary({ calculated }) {
               {it.label}
               {it.info && <InfoTip text={it.info} />}
             </div>
-            <div style={valueStyle}>{it.value}</div>
+            <div style={valueStyle}>{withSmallDecimals(it.value)}</div>
           </div>
         ))}
       </div>
@@ -3271,11 +3310,11 @@ function CardsByCountryView({ batches, countryUsers, updateRoot }) {
       {label}
     </th>
   );
-  // Discounts & Fees and CAC can be negative by design — colour negatives red
-  // per cell, matching the By Month grid.
-  const num = (val, unit, bold) => (
-    <td style={{ textAlign: 'right', fontSize: 13, fontWeight: bold ? 700 : 600, padding: '12px 12px', color: isNum(val) && val < 0 ? DANGER : undefined }}>
-      {val == null ? DASH : fmtByUnit(val, unit)}
+  // Discounts & Fees and CAC are cost metrics: a negative is GOOD (money
+  // recovered) and reads green; other columns keep negative = red.
+  const num = (val, unit, bold, negGood) => (
+    <td style={{ textAlign: 'right', fontSize: 13, fontWeight: bold ? 700 : 600, padding: '12px 12px', color: isNum(val) && val < 0 ? (negGood ? SUCCESS : DANGER) : undefined }}>
+      {val == null ? DASH : withSmallDecimals(fmtByUnit(val, unit))}
     </td>
   );
 
@@ -3313,7 +3352,7 @@ function CardsByCountryView({ batches, countryUsers, updateRoot }) {
                     </td>
                     {num(empty ? null : s.cards, 'count')}
                     {num(empty ? null : s.volume, 'usdt')}
-                    {num(empty ? null : s.discounts, 'usdt')}
+                    {num(empty ? null : s.discounts, 'usdt', false, true)}
                     {num(empty ? null : s.avgDisc, 'percent2')}
                     {empty ? (
                       // Not launched / no data → "—" in every column, including
@@ -3328,7 +3367,7 @@ function CardsByCountryView({ batches, countryUsers, updateRoot }) {
                         />
                       </td>
                     )}
-                    {num(empty ? null : s.cac, 'ratio')}
+                    {num(empty ? null : s.cac, 'ratio', false, true)}
                     {/* Revenue isn't wired yet (all 0) — show "—" until real
                         revenue is entered, not a hard $0.00 that looks like data. */}
                     {num(empty || !(s.revenue > 0) ? null : s.revenue, 'usdt')}
@@ -3339,10 +3378,10 @@ function CardsByCountryView({ batches, countryUsers, updateRoot }) {
                 <td style={{ textAlign: 'left', fontSize: 13, fontWeight: 700, padding: '12px 16px' }}>Total</td>
                 {num(total.anyBatch ? total.cards : null, 'count', true)}
                 {num(total.anyBatch ? total.volume : null, 'usdt', true)}
-                {num(total.anyBatch ? total.discounts : null, 'usdt', true)}
+                {num(total.anyBatch ? total.discounts : null, 'usdt', true, true)}
                 {num(totalAvgDisc, 'percent2', true)}
                 {num(total.anyUser ? total.users : null, 'count', true)}
-                {num(totalCac, 'ratio', true)}
+                {num(totalCac, 'ratio', true, true)}
                 {num(total.revenue > 0 ? total.revenue : null, 'usdt', true)}
               </tr>
             </tbody>
@@ -3481,19 +3520,20 @@ function CardsBatchesView({ batches, countryUsers, updateRoot }) {
       <Cell value={isNum(b[key]) ? b[key] : null} unit={unit} onCommit={(v) => updateBatch(b.id, { [key]: v })} />
     </td>
   );
-  // Computed batch cells (Discounts & Fees, CAC) can be negative — red per cell.
-  const cCell = (val, unit) => (
-    <td style={{ textAlign: 'right', fontSize: 13, padding: '8px 8px', color: isNum(val) && val < 0 ? DANGER : C.text }}>
-      {val == null ? DASH : fmtByUnit(val, unit)}
+  // Computed batch cells. Discounts & Fees and CAC are cost metrics: a negative
+  // is GOOD (money recovered) and reads green; otherwise negative = red.
+  const cCell = (val, unit, negGood) => (
+    <td style={{ textAlign: 'right', fontSize: 13, padding: '8px 8px', color: isNum(val) && val < 0 ? (negGood ? SUCCESS : DANGER) : C.text }}>
+      {val == null ? DASH : withSmallDecimals(fmtByUnit(val, unit))}
     </td>
   );
   // Pinned (sticky-bottom) totals row — opaque background so rows don't show
   // through while scrolling.
   const FOOTER_BG = CALC_LABEL_BG;
   const fStick = { position: 'sticky', bottom: 0, zIndex: 1, background: FOOTER_BG };
-  const fCell = (val, unit) => (
-    <td style={{ ...fStick, textAlign: 'right', fontSize: 13, fontWeight: 700, padding: '10px 8px', color: isNum(val) && val < 0 ? DANGER : undefined }}>
-      {val == null ? DASH : fmtByUnit(val, unit)}
+  const fCell = (val, unit, negGood) => (
+    <td style={{ ...fStick, textAlign: 'right', fontSize: 13, fontWeight: 700, padding: '10px 8px', color: isNum(val) && val < 0 ? (negGood ? SUCCESS : DANGER) : undefined }}>
+      {val == null ? DASH : withSmallDecimals(fmtByUnit(val, unit))}
     </td>
   );
 
@@ -3606,10 +3646,10 @@ function CardsBatchesView({ batches, countryUsers, updateRoot }) {
                     {mCell(b, 'cards', 'count')}
                     {mCell(b, 'fundsSent', 'usdt')}
                     {mCell(b, 'fundsReceived', 'usdt')}
-                    {cCell(batchDiscounts(b), 'usdt')}
+                    {cCell(batchDiscounts(b), 'usdt', true)}
                     {cCell(batchAvgDisc(b), 'percent2')}
                     {mCell(b, 'uniqueUsers', 'count')}
-                    {cCell(batchCac(b), 'ratio')}
+                    {cCell(batchCac(b), 'ratio', true)}
                     {mCell(b, 'revenue', 'usdt')}
                     {editable && (
                       <td style={{ textAlign: 'center', padding: '4px 6px' }}>
@@ -3639,10 +3679,10 @@ function CardsBatchesView({ batches, countryUsers, updateRoot }) {
                   {fCell(f.cards, 'count')}
                   {fCell(f.sent, 'usdt')}
                   {fCell(f.recv, 'usdt')}
-                  {fCell(f.disc, 'usdt')}
+                  {fCell(f.disc, 'usdt', true)}
                   {fCell(f.avg, 'percent2')}
                   {fCell(f.users, 'count')}
-                  {fCell(f.cac, 'ratio')}
+                  {fCell(f.cac, 'ratio', true)}
                   {fCell(f.rev, 'usdt')}
                   {editable && <td style={fStick} />}
                 </tr>
@@ -4411,7 +4451,7 @@ function HeroMetric({ label, value, delta, compare, divider }) {
           fontVariantNumeric: 'tabular-nums',
         }}
       >
-        {value}
+        {withSmallDecimals(value)}
       </div>
       <div style={{ marginTop: 12, display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
         <DeltaToken delta={delta} size={12.5} />
@@ -4436,7 +4476,7 @@ function StatCard({ label, value, delta }) {
             fontVariantNumeric: 'tabular-nums',
           }}
         >
-          {value}
+          {withSmallDecimals(value)}
         </span>
         <DeltaToken delta={delta} size={11.5} />
       </div>
@@ -4459,8 +4499,8 @@ function TrendTooltip({ active, label, reported, installs, users }) {
         <div style={{ color: C.muted }}>Not yet reported</div>
       ) : (
         <>
-          <div style={{ color: CHART_COLORS.installs }}>Installs: {installs[i] == null ? DASH : fmtNumber(installs[i])}</div>
-          <div style={{ color: CHART_COLORS.users }}>Active Users: {users[i] == null ? DASH : fmtNumber(users[i])}</div>
+          <div style={{ color: CHART_COLORS.installs }}>Installs: {installs[i] == null ? DASH : withSmallDecimals(fmtNumber(installs[i]))}</div>
+          <div style={{ color: CHART_COLORS.users }}>Active Users: {users[i] == null ? DASH : withSmallDecimals(fmtNumber(users[i]))}</div>
         </>
       )}
     </div>
@@ -4754,7 +4794,7 @@ function DashboardTab({ allYears }) {
     },
   ];
   const engagementDefs = [
-    { label: 'Install → User Conversion', type: 'ratio', num: ['u_newUsers'], den: storeKeys, unit: 'percent2' },
+    { label: 'User Conversion Rate', type: 'ratio', num: ['u_newUsers'], den: storeKeys, unit: 'percent2' },
     { label: 'Transaction Count', type: 'additive', keys: countKeys, unit: 'count' },
     { label: 'Transaction Volume (USDT)', type: 'additive', keys: valueKeys, unit: 'usdt' },
     { label: 'MAU', type: 'point', key: 'u_mau', unit: 'count' },
