@@ -1528,7 +1528,10 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
     padding: '5px 0 4px',
   });
   const summaryCell = { textAlign: 'right', padding: '12px 16px', borderLeft: `1px solid ${C.border}`, whiteSpace: 'nowrap' };
-  const summaryHead = { ...thBase, padding: '12px 16px', color: C.text, fontWeight: 700, borderLeft: `1px solid ${C.border}` };
+  // Sticky-header additions for the scrollable fixed-grid layout: header cells
+  // pin to the top of the scroll container as the rows scroll under them.
+  const headStick = fixedMonths ? { position: 'sticky', top: 0, zIndex: 2 } : null;
+  const summaryHead = { ...thBase, padding: '12px 16px', color: C.text, fontWeight: 700, borderLeft: `1px solid ${C.border}`, background: C.card, ...headStick };
 
   // Shared value-cell colour/weight. Ordinary computed rows render like detail
   // rows (no bold/blue); only `total` rows (calc rows on tables where tintCalc)
@@ -1625,7 +1628,10 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
   }
 
   return (
-    <div style={{ overflowX: 'auto' }}>
+    // Long month-grid tables (fixedMonths) scroll inside their own container so
+    // the header row can stick to the top while the rows scroll under it. Other
+    // layouts keep simple horizontal overflow.
+    <div style={fixedMonths ? { maxHeight: 'calc(100vh - 150px)', overflow: 'auto' } : { overflowX: 'auto' }}>
       <table
         style={{
           borderCollapse: 'collapse',
@@ -1687,13 +1693,14 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
                 padding: '12px 16px',
                 position: 'sticky',
                 left: 0,
+                top: fixedMonths ? 0 : undefined,
                 background: C.card,
-                zIndex: 1,
+                zIndex: fixedMonths ? 3 : 1,
               }}
             >
               Metric
             </th>
-            <th style={{ ...thBase, textAlign: 'left', padding: '12px 8px 12px 0' }}>Trend</th>
+            <th style={{ ...thBase, textAlign: 'left', padding: '12px 8px 12px 0', background: C.card, ...headStick }}>Trend</th>
             {hasPre && preHead}
             {reported.map((i) => (
               <th
@@ -1703,7 +1710,8 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
                   minWidth: fixedMonths ? undefined : REPORTED_MIN,
                   fontWeight: 700,
                   color: isCurrent(i) ? C.primary : isBanded(i) ? C.gray500 : C.muted,
-                  background: colTint(i),
+                  background: colTint(i) || C.card,
+                  ...headStick,
                 }}
               >
                 {MONTHS[i]}
@@ -1722,26 +1730,42 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
               prev && prev.kind === 'calc' && row.kind !== 'calc' && !row.noBreak;
 
             if (row.kind === 'subhead') {
+              const subLabelStyle = {
+                fontSize: 10.5,
+                fontWeight: 700,
+                letterSpacing: '0.07em',
+                textTransform: 'uppercase',
+                color: C.primary,
+                textAlign: 'left',
+                padding: '16px 16px 6px',
+                whiteSpace: 'nowrap',
+              };
+              // A section that pre-dates its own launch (e.g. Off-Ramp before
+              // Sep 2025) shows a labelled pre-launch band over its lead months —
+              // the table-level band treatment, scoped to this section.
+              const sectionBand = fixedMonths && row.bandUntil > 0 ? Math.min(row.bandUntil, 12) : 0;
               return (
                 <React.Fragment key={`s${ri}`}>
                   {needsBreak && <DividerRow cols={colCount} />}
                   <tr>
-                    <td
-                      colSpan={colCount}
-                      style={{
-                        fontSize: 10.5,
-                        fontWeight: 700,
-                        letterSpacing: '0.07em',
-                        textTransform: 'uppercase',
-                        color: C.primary,
-                        textAlign: 'left',
-                        padding: '16px 16px 6px',
-                        whiteSpace: 'nowrap',
-                      }}
-                    >
-                      {row.label}
-                      {row.info && <InfoTip text={row.info} />}
-                    </td>
+                    {sectionBand > 0 ? (
+                      <>
+                        <td colSpan={2} style={subLabelStyle}>
+                          {row.label}
+                          {row.info && <InfoTip text={row.info} />}
+                        </td>
+                        <th colSpan={sectionBand} style={groupLabel(PRE_LABEL, PRE_LABEL_BG)}>
+                          {row.bandLabel || 'Pre-launch'}
+                        </th>
+                        {sectionBand < 12 && <td colSpan={12 - sectionBand} />}
+                        <td />
+                      </>
+                    ) : (
+                      <td colSpan={colCount} style={subLabelStyle}>
+                        {row.label}
+                        {row.info && <InfoTip text={row.info} />}
+                      </td>
+                    )}
                   </tr>
                 </React.Fragment>
               );
@@ -1784,6 +1808,12 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
                     {hasPre && preBandCell}
                     {reported.map((i) => {
                       const m = MONTHS[i];
+                      // Per-section pre-launch band (e.g. Off-Ramp before its
+                      // launch): a faint tinted, blank cell — matches the
+                      // table-level band, not the lighter per-store en-dash.
+                      if (row.bandUntil != null && i < row.bandUntil) {
+                        return <td key={m} style={{ background: PRE_COL_TINT }} />;
+                      }
                       const cellVal = getVal(yearData, row.key, i);
                       // Per-row pre-launch (store not yet live) with no data renders
                       // as a faint en-dash — lighter than a genuine no-data dash,
@@ -1960,6 +1990,10 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
                 </td>
                 {hasPre && preBandCell}
                 {reported.map((i) => {
+                  // Per-section pre-launch band: faint tinted, blank cell.
+                  if (row.bandUntil != null && i < row.bandUntil) {
+                    return <td key={i} style={{ background: PRE_COL_TINT }} />;
+                  }
                   const v = row.values[i];
                   const cur = isCurrent(i);
                   const heat = row.heat ? heatCell(heatNums, v) : null;
@@ -2584,13 +2618,24 @@ const TX_VOLUME_INFO = 'Volume valued at market prices as of 30th June, 2026';
 // pre-launch band. Same concept as CARD_LAUNCH, tracking-start = Dec 2023.
 const TX_TRACKING_YEAR = 2023;
 const TX_TRACKING_MONTH = 11; // Dec, 0-based
-const TX_TRACKING_LABEL = "Weren't tracked";
+const TX_TRACKING_LABEL = 'Not tracked yet';
 
 // How many leading months of `activeYear` pre-date tracking (0, up to the start
 // month, or the whole year).
 function txPreTrackingCols(activeYear) {
   if (activeYear < TX_TRACKING_YEAR) return 12;
   if (activeYear === TX_TRACKING_YEAR) return TX_TRACKING_MONTH;
+  return 0;
+}
+
+// Off-ramps (cash-out) went live September 2025 — a fixed boundary. Months
+// before it render the Off-Ramp Health rows as a pre-launch band (same treatment
+// as the Cards CARD_LAUNCH band), scoped to that section only.
+const OFFRAMP_LAUNCH_YEAR = 2025;
+const OFFRAMP_LAUNCH_MONTH = 8; // Sep, 0-based
+function offrampPreLaunchCols(activeYear) {
+  if (activeYear < OFFRAMP_LAUNCH_YEAR) return 12;
+  if (activeYear === OFFRAMP_LAUNCH_YEAR) return OFFRAMP_LAUNCH_MONTH;
   return 0;
 }
 
@@ -2618,6 +2663,10 @@ function TransactionsTab({ yearData, updateMetric, allYears, activeYear }) {
   const volY = seriesSum(totalVol, latest);
   const attY = seriesSum(attempts, latest);
   const sucY = seriesSum(successful, latest);
+
+  // Off-Ramp Health pre-dates its Sep-2025 launch: render the leading months as
+  // a per-section pre-launch band rather than blank dashes.
+  const offBand = offrampPreLaunchCols(activeYear);
 
   const rows = [
     { kind: 'subhead', label: 'Transaction Count' },
@@ -2648,12 +2697,13 @@ function TransactionsTab({ yearData, updateMetric, allYears, activeYear }) {
       ...calc('Overall', 'ratio', lifeAvg, null, 'The all-time average transaction size. Calculated as Total Volume / Total Transactions.'),
       blankTotal: true,
     },
-    { kind: 'subhead', label: 'Off-Ramp Health' },
-    { kind: 'input', key: 'tx_offrampAttempts', label: 'Cash-Out Attempts', unit: 'count' },
-    { kind: 'input', key: 'tx_offrampSuccessful', label: 'Successful Cash-Outs', unit: 'count' },
+    { kind: 'subhead', label: 'Off-Ramp Health', bandUntil: offBand, bandLabel: 'Pre-launch' },
+    { kind: 'input', key: 'tx_offrampAttempts', label: 'Cash-Out Attempts', unit: 'count', bandUntil: offBand },
+    { kind: 'input', key: 'tx_offrampSuccessful', label: 'Successful Cash-Outs', unit: 'count', bandUntil: offBand },
     {
-      ...calc('Off-Ramp Success Rate', 'percent', successRate, pct(sucY, attY), 'Successful ÷ attempts.'),
+      ...calc('Success Rate', 'percent', successRate, pct(sucY, attY), 'Successful ÷ attempts.'),
       heat: true,
+      bandUntil: offBand,
     },
   ];
 
