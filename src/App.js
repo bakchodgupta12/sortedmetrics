@@ -163,6 +163,19 @@ const PASTEL = {
   gray: '#c4c7d0', // neutral "other"
 };
 
+// Single shared chart palette. Every series references this so a given metric
+// keeps the same colour on every tab — Installs is the same blue on the
+// Dashboard and the Installs tab, Revenue the same gold everywhere, etc. Defined
+// once here; never hard-code a chart colour at the call site.
+const CHART_COLORS = {
+  installs: '#5B8DEF', // installs / primary series
+  users: '#2BC4A0', // users / active users
+  revenue: '#F5A623', // revenue
+  cost: '#E8557F', // cost
+  transactions: '#9B7EDE', // transactions / fourth series
+  cards: '#3FB9D4', // cards / fifth series
+};
+
 // Card chrome (per the reference): plain border + a soft shell shadow, NO
 // coloured top edge. Used for every table/chart/KPI card across all tabs.
 const CARD_BORDER = '#ecece5';
@@ -2032,6 +2045,17 @@ function ChartCard({ title, height = 240, children }) {
   );
 }
 
+// Shared tooltip card chrome so every chart's hover tooltip looks identical
+// (matches the app's card styling: white surface, hairline border, soft shadow).
+const TOOLTIP_BOX = {
+  background: '#fff',
+  border: `1px solid ${C.border}`,
+  borderRadius: 10,
+  padding: '8px 10px',
+  boxShadow: '0 4px 14px rgba(0,0,0,0.06)',
+  fontSize: 12,
+};
+
 function ChartTooltip({ active, payload, label, fmt, reported }) {
   if (!active || !payload || !payload.length) return null;
   const f = fmt || fmtNumber;
@@ -2040,16 +2064,7 @@ function ChartTooltip({ active, payload, label, fmt, reported }) {
   // Hide the dashed "projection" duplicate series (keys ending in __up).
   const rows = payload.filter((p) => !String(p.dataKey).endsWith('__up'));
   return (
-    <div
-      style={{
-        background: '#fff',
-        border: `1px solid ${C.border}`,
-        borderRadius: 10,
-        padding: '8px 10px',
-        boxShadow: '0 4px 14px rgba(0,0,0,0.06)',
-        fontSize: 12,
-      }}
-    >
+    <div style={TOOLTIP_BOX}>
       <div style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
       {upcoming ? (
         <div style={{ color: C.muted }}>Not yet reported</div>
@@ -2120,12 +2135,14 @@ const STORE_LAUNCH = {
 
 // Intentional pastel palette for the store charts (NOT brand-mapped — chosen
 // for legibility across 5 series). Exact hexes per the design handoff.
+// Brighter per-store palette for the "Installs by Store" stacked chart. Single
+// source of truth — the chart and its legend both read these.
 const STORE_KEYS = [
-  ['dl_kaios', 'KaiOS', '#9AA7F2'],
-  ['dl_googlePlay', 'Google Play', '#9BDBC0'],
-  ['dl_palmStore', 'Palm Store', '#F6CE8C'],
-  ['dl_indusStore', 'Indus Store', '#C9B0EC'],
-  ['dl_vivoStore', 'Vivo Store', '#F4A9A8'],
+  ['dl_kaios', 'KaiOS', '#6E8AF0'],
+  ['dl_googlePlay', 'Google Play', '#3DCCA6'],
+  ['dl_palmStore', 'Palm Store', '#F7B53D'],
+  ['dl_indusStore', 'Indus Store', '#A98CEC'],
+  ['dl_vivoStore', 'Vivo Store', '#FF6F91'],
 ];
 
 // Stores live in a given year (curated): 2023–24 KaiOS only; 2025 drops Vivo;
@@ -2261,6 +2278,7 @@ function niceCeil(n) {
 // empty "Upcoming" slots; reported bars end at the current month.
 function StoreInstallsChart({ yearData, latest, stores: storeDefs = STORE_KEYS }) {
   const [mode, setMode] = useState('volume');
+  const [hovered, setHovered] = useState(null); // month index under the cursor
   const stores = storeDefs.map(([key, label, color]) => ({
     key,
     label,
@@ -2406,7 +2424,9 @@ function StoreInstallsChart({ yearData, latest, stores: storeDefs = STORE_KEYS }
               ) : (
                 <div
                   key={bar.m}
-                  style={{ flex: 1, height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'flex-end' }}
+                  onMouseEnter={() => setHovered(bar.m)}
+                  onMouseLeave={() => setHovered((h) => (h === bar.m ? null : h))}
+                  style={{ flex: 1, height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', position: 'relative' }}
                 >
                   <div
                     style={{
@@ -2422,6 +2442,31 @@ function StoreInstallsChart({ yearData, latest, stores: storeDefs = STORE_KEYS }
                       <div key={si} style={{ width: '100%', height: `${seg.h.toFixed(2)}%`, background: seg.color }} />
                     ))}
                   </div>
+                  {hovered === bar.m && (
+                    <div
+                      style={{
+                        ...TOOLTIP_BOX,
+                        position: 'absolute',
+                        bottom: '100%',
+                        left: '50%',
+                        transform: 'translateX(-50%)',
+                        marginBottom: 8,
+                        zIndex: 20,
+                        pointerEvents: 'none',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      <div style={{ fontWeight: 600, marginBottom: 4 }}>{MONTHS[bar.m]}</div>
+                      {stores.map((s) => (
+                        <div key={s.key} style={{ color: s.color }}>
+                          {s.label}: {isNum(s.vals[bar.m]) ? fmtNumber(s.vals[bar.m]) : DASH}
+                        </div>
+                      ))}
+                      <div style={{ marginTop: 4, paddingTop: 4, borderTop: `1px solid ${C.gray200}`, fontWeight: 600, color: C.text }}>
+                        Total: {fmtNumber(totals[bar.m] || 0)}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )
             )}
@@ -2622,13 +2667,13 @@ function TransactionsTab({ yearData, updateMetric, allYears, activeYear }) {
           <CartesianGrid {...GRID} />
           <XAxis {...X_AXIS} />
           <YAxis {...yAxis()} yAxisId="left" />
-          <Tooltip content={<ChartTooltip fmt={fmtUSDT} reported={latest} />} />
+          <Tooltip content={<ChartTooltip fmt={(v) => withDollar(fmtUSDT(v))} reported={latest} />} />
           <Legend wrapperStyle={{ fontSize: 11 }} itemSorter={null} />
-          <Bar yAxisId="left" dataKey="Send" stackId="v" fill={PASTEL.blue} barSize={20} />
-          <Bar yAxisId="left" dataKey="Receive" stackId="v" fill={PASTEL.mint} barSize={20} />
-          <Bar yAxisId="left" dataKey="Cash-Out" stackId="v" fill={PASTEL.sky} barSize={20} />
-          <Bar yAxisId="left" dataKey="Top-up Cards" stackId="v" fill={PASTEL.lavender} barSize={20} />
-          <Bar yAxisId="left" dataKey="Other" stackId="v" fill={PASTEL.gray} barSize={20} radius={[4, 4, 0, 0]} />
+          <Bar yAxisId="left" dataKey="Send" stackId="v" fill={CHART_COLORS.installs} barSize={20} />
+          <Bar yAxisId="left" dataKey="Receive" stackId="v" fill={CHART_COLORS.users} barSize={20} />
+          <Bar yAxisId="left" dataKey="Cash-Out" stackId="v" fill={CHART_COLORS.revenue} barSize={20} />
+          <Bar yAxisId="left" dataKey="Top-up Cards" stackId="v" fill={CHART_COLORS.cards} barSize={20} />
+          <Bar yAxisId="left" dataKey="Other" stackId="v" fill={CHART_COLORS.transactions} barSize={20} radius={[4, 4, 0, 0]} />
         </ComposedChart>
       </ChartCard>
     </div>
@@ -2688,7 +2733,7 @@ function CardsActivityTooltip({ active, payload, label, reported }) {
   const upcoming = reported != null && reported >= 0 && i > reported;
   const rows = payload.filter((p) => !String(p.dataKey).endsWith('__up'));
   return (
-    <div style={{ background: '#fff', border: `1px solid ${C.border}`, borderRadius: 10, padding: '8px 10px', boxShadow: '0 4px 14px rgba(0,0,0,0.06)', fontSize: 12 }}>
+    <div style={TOOLTIP_BOX}>
       <div style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
       {upcoming ? (
         <div style={{ color: C.muted }}>Not yet reported</div>
@@ -2829,6 +2874,7 @@ function CardsTab({ yearData, updateMetric, allYears, activeYear, cardBatches, c
           updateMetric={updateMetric}
           allYears={allYears}
           activeYear={activeYear}
+          cardBatches={cardBatches}
           cardCountryUsers={cardCountryUsers}
         />
       )}
@@ -2844,7 +2890,7 @@ function CardsTab({ yearData, updateMetric, allYears, activeYear, cardBatches, c
 
 // Sub-tab 1 — Monthly. The existing manual monthly card-activity table, the
 // Lifetime strip, and the monthly activity chart. Unchanged logic.
-function CardsMonthlyView({ yearData, updateMetric, allYears, activeYear, cardCountryUsers }) {
+function CardsMonthlyView({ yearData, updateMetric, allYears, activeYear, cardBatches = [], cardCountryUsers }) {
   const latest = latestMonthIndex(yearData);
   const sold = rawSeries(yearData, 'c_sold');
   const cardsVolume = rawSeries(yearData, 'c_valueDistributed');
@@ -2887,11 +2933,15 @@ function CardsMonthlyView({ yearData, updateMetric, allYears, activeYear, cardCo
     }
     return any ? t : null;
   })();
-  // Lifetime CAC = lifetime Cost of Sales ÷ lifetime Unique Users, where
-  // lifetime Cost of Sales = all-time Cards Volume − all-time Funds Collected.
-  const lifeFundsTotal = allYearsTotal(allYears, ['c_fundsCollected']);
-  const lifeCostOfSales =
-    lifeVolTotal == null && lifeFundsTotal == null ? null : (lifeVolTotal || 0) - (lifeFundsTotal || 0);
+  // Lifetime CAC = lifetime Cost of Sales ÷ lifetime Unique Users. Cost of Sales
+  // is summed across ALL batches/all time (Cards Volume − Funds Collected), the
+  // same source the By Country Total row uses — so the two CACs reconcile, and
+  // the denominator is the identical per-country Unique Users sum shown above.
+  const lifeCostOfSales = (() => {
+    const sums = CARD_COUNTRIES.map((c) => cardCountrySummary(c, cardBatches, cardCountryUsers[c]));
+    if (!sums.some((s) => s.count > 0)) return null;
+    return sums.reduce((a, s) => a + s.discounts, 0);
+  })();
   const lifeCac =
     lifeCostOfSales != null && isNum(lifeUsersTotal) && lifeUsersTotal !== 0
       ? lifeCostOfSales / lifeUsersTotal
@@ -3009,8 +3059,8 @@ function CardsMonthlyView({ yearData, updateMetric, allYears, activeYear, cardCo
             </div>
           </div>
           <div style={{ display: 'flex', gap: 14, fontSize: 11.5, color: C.muted }}>
-            <span><span style={{ color: PASTEL.lavender }}>●</span> Cards Sold</span>
-            <span><span style={{ color: PASTEL.blue }}>●</span> Cards / User</span>
+            <span><span style={{ color: CHART_COLORS.cards }}>●</span> Cards Sold</span>
+            <span><span style={{ color: CHART_COLORS.installs }}>●</span> Cards / User</span>
           </div>
         </div>
         {hasLiveData ? (
@@ -3032,13 +3082,13 @@ function CardsMonthlyView({ yearData, updateMetric, allYears, activeYear, cardCo
                 domain={[0, (max) => Math.max(1, Math.ceil(max))]}
               />
               <Tooltip content={<CardsActivityTooltip reported={latest} />} />
-              <Bar yAxisId="left" dataKey="Cards Sold" fill={PASTEL.lavender} barSize={18} radius={[4, 4, 0, 0]} />
-              <Line yAxisId="right" type="monotone" dataKey="Cards / User" stroke={PASTEL.blue} strokeWidth={2} dot={{ r: 2.5, fill: PASTEL.blue, strokeWidth: 0 }} connectNulls />
+              <Bar yAxisId="left" dataKey="Cards Sold" fill={CHART_COLORS.cards} barSize={18} radius={[4, 4, 0, 0]} />
+              <Line yAxisId="right" type="monotone" dataKey="Cards / User" stroke={CHART_COLORS.installs} strokeWidth={2} dot={{ r: 2.5, fill: CHART_COLORS.installs, strokeWidth: 0 }} connectNulls />
               <Line
                 yAxisId="right"
                 type="monotone"
                 dataKey="Cards / User__up"
-                stroke={PASTEL.blue}
+                stroke={CHART_COLORS.installs}
                 strokeOpacity={0.4}
                 strokeWidth={2}
                 strokeDasharray="6 6"
@@ -3669,10 +3719,10 @@ function RevenueTab({ yearData, updateMetric, activeYear }) {
           <CartesianGrid {...GRID} />
           <XAxis {...X_AXIS} />
           <YAxis {...yAxis()} />
-          <Tooltip content={<ChartTooltip fmt={fmtNumber} reported={latest} />} />
+          <Tooltip content={<ChartTooltip fmt={(v) => withDollar(fmtNumber(v))} reported={latest} />} />
           <Legend wrapperStyle={{ fontSize: 11 }} itemSorter={null} />
-          <Bar dataKey="Revenue" fill={PASTEL.mint} barSize={18} radius={[4, 4, 0, 0]} />
-          <Bar dataKey="Cost of Revenue" fill={PASTEL.coral} barSize={18} radius={[4, 4, 0, 0]} />
+          <Bar dataKey="Revenue" fill={CHART_COLORS.revenue} barSize={18} radius={[4, 4, 0, 0]} />
+          <Bar dataKey="Cost of Revenue" fill={CHART_COLORS.cost} barSize={18} radius={[4, 4, 0, 0]} />
         </ComposedChart>
       </ChartCard>
     </div>
@@ -4325,22 +4375,15 @@ function TrendTooltip({ active, label, reported, installs, users }) {
   const upcoming = reported >= 0 && i > reported;
   return (
     <div
-      style={{
-        background: '#fff',
-        border: `1px solid ${C.border}`,
-        borderRadius: 10,
-        padding: '8px 10px',
-        boxShadow: '0 4px 14px rgba(0,0,0,0.06)',
-        fontSize: 12,
-      }}
+      style={TOOLTIP_BOX}
     >
       <div style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
       {upcoming ? (
         <div style={{ color: C.muted }}>Not yet reported</div>
       ) : (
         <>
-          <div style={{ color: C.green }}>Installs: {installs[i] == null ? DASH : fmtNumber(installs[i])}</div>
-          <div style={{ color: C.primary }}>Active Users: {users[i] == null ? DASH : fmtNumber(users[i])}</div>
+          <div style={{ color: CHART_COLORS.installs }}>Installs: {installs[i] == null ? DASH : fmtNumber(installs[i])}</div>
+          <div style={{ color: CHART_COLORS.users }}>Active Users: {users[i] == null ? DASH : fmtNumber(users[i])}</div>
         </>
       )}
     </div>
@@ -4656,11 +4699,13 @@ function DashboardTab({ allYears }) {
   const engagementMetrics = engagementDefs.map((d) => buildMetric(d, false));
   const economicsMetrics = economicsDefs.map((d) => buildMetric(d, false));
 
-  // Window label so the two timeframes are unmistakable (single month vs range).
-  const windowLabel =
+  // Timeframe suffix so the two windows are unmistakable (single month vs
+  // range). Leads the band labels after the one-word category. The month tracks
+  // the selected window — by default the latest completed month, dynamically.
+  const windowSuffix =
     periodCount === 1
-      ? `This month · ${fmtPeriod(periods[0])}`
-      : `Selected range · ${fmtPeriod(periods[0])} – ${fmtPeriod(periods[periods.length - 1])}`;
+      ? fmtPeriod(periods[0])
+      : `${fmtPeriod(periods[0])} – ${fmtPeriod(periods[periods.length - 1])}`;
 
   // Combined trend chart: a 12-month calendar year, solid through the latest
   // reported month then a softly-shaded "upcoming" band with dashed lines.
@@ -4832,7 +4877,7 @@ function DashboardTab({ allYears }) {
 
       {/* ── ROW 1 · Lifetime headline scale (hero) ───────────────────────── */}
       <div style={{ display: 'grid', gap: 8 }}>
-        <div style={BAND_LABEL}>Lifetime · all-time scale</div>
+        <div style={BAND_LABEL}>Scale · Lifetime</div>
         <div
           style={{
             background: C.card,
@@ -4852,7 +4897,7 @@ function DashboardTab({ allYears }) {
 
       {/* ── ROW 2 · Engagement (selected window) ─────────────────────────── */}
       <div style={{ display: 'grid', gap: 8 }}>
-        <div style={BAND_LABEL}>{windowLabel} · engagement</div>
+        <div style={BAND_LABEL}>Engagement · {windowSuffix}</div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 14 }}>
           {engagementMetrics.map((m, i) => (
             <StatCard key={i} {...m} />
@@ -4862,7 +4907,7 @@ function DashboardTab({ allYears }) {
 
       {/* ── ROW 3 · Economics (selected window) ──────────────────────────── */}
       <div style={{ display: 'grid', gap: 8 }}>
-        <div style={BAND_LABEL}>{windowLabel} · economics</div>
+        <div style={BAND_LABEL}>Economics · {windowSuffix}</div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 14 }}>
           {economicsMetrics.map((m, i) => (
             <StatCard key={i} {...m} />
@@ -4887,10 +4932,10 @@ function DashboardTab({ allYears }) {
           </h3>
           <div style={{ display: 'flex', gap: 16, fontSize: 11.5, color: C.muted }}>
             <span>
-              <span style={{ color: C.green }}>●</span> Installs
+              <span style={{ color: CHART_COLORS.installs }}>●</span> Installs
             </span>
             <span>
-              <span style={{ color: C.primary }}>●</span> Active Users
+              <span style={{ color: CHART_COLORS.users }}>●</span> Active Users
             </span>
             <span style={{ color: UPCOMING_LABEL }}>▦ Upcoming</span>
           </div>
@@ -4900,7 +4945,7 @@ function DashboardTab({ allYears }) {
         ) : (
           <ResponsiveContainer width="100%" height={250}>
             <ComposedChart data={trendData} margin={{ top: 6, right: 8, left: 0, bottom: 0 }}>
-              {gradient('dashTrendInstalls', C.green)}
+              {gradient('dashTrendInstalls', CHART_COLORS.installs)}
               <CartesianGrid {...GRID} />
               {reported < 11 && (
                 <ReferenceArea
@@ -4924,7 +4969,7 @@ function DashboardTab({ allYears }) {
                 yAxisId="left"
                 type="monotone"
                 dataKey="installsSolid"
-                stroke={C.green}
+                stroke={CHART_COLORS.installs}
                 strokeWidth={2.4}
                 fill="url(#dashTrendInstalls)"
                 dot={false}
@@ -4934,7 +4979,7 @@ function DashboardTab({ allYears }) {
                 yAxisId="left"
                 type="monotone"
                 dataKey="installsDash"
-                stroke={C.green}
+                stroke={CHART_COLORS.installs}
                 strokeOpacity={0.4}
                 strokeWidth={2}
                 strokeDasharray="6 6"
@@ -4945,7 +4990,7 @@ function DashboardTab({ allYears }) {
                 yAxisId="right"
                 type="monotone"
                 dataKey="usersSolid"
-                stroke={C.primary}
+                stroke={CHART_COLORS.users}
                 strokeWidth={2.4}
                 dot={false}
                 connectNulls={false}
@@ -4954,7 +4999,7 @@ function DashboardTab({ allYears }) {
                 yAxisId="right"
                 type="monotone"
                 dataKey="usersDash"
-                stroke={C.primary}
+                stroke={CHART_COLORS.users}
                 strokeOpacity={0.4}
                 strokeWidth={2}
                 strokeDasharray="6 6"
@@ -4974,10 +5019,10 @@ function DashboardTab({ allYears }) {
             <h3 style={{ fontFamily: 'var(--font-head)', fontWeight: 600, fontSize: 16, margin: 0 }}>Revenue vs Cost</h3>
             <div style={{ display: 'flex', gap: 16, fontSize: 11.5, color: C.muted }}>
               <span>
-                <span style={{ color: C.primary }}>●</span> Revenue
+                <span style={{ color: CHART_COLORS.revenue }}>●</span> Revenue
               </span>
               <span>
-                <span style={{ color: '#F6CE8C' }}>●</span> Cost
+                <span style={{ color: CHART_COLORS.cost }}>●</span> Cost
               </span>
             </div>
           </div>
@@ -4990,8 +5035,8 @@ function DashboardTab({ allYears }) {
                 <XAxis dataKey="m" tickLine={false} axisLine={false} interval={0} tick={renderMonthTick} />
                 <YAxis {...yAxis()} />
                 <Tooltip content={(p) => <ChartTooltip {...p} fmt={(v) => withDollar(fmtNumber(v))} reported={reported} />} />
-                <Bar dataKey="Revenue" fill={C.primary} radius={[3, 3, 0, 0]} maxBarSize={18} />
-                <Bar dataKey="Cost" fill="#F6CE8C" radius={[3, 3, 0, 0]} maxBarSize={18} />
+                <Bar dataKey="Revenue" fill={CHART_COLORS.revenue} radius={[3, 3, 0, 0]} maxBarSize={18} />
+                <Bar dataKey="Cost" fill={CHART_COLORS.cost} radius={[3, 3, 0, 0]} maxBarSize={18} />
               </ComposedChart>
             </ResponsiveContainer>
           )}
@@ -5009,7 +5054,7 @@ function DashboardTab({ allYears }) {
           ) : (
             <ResponsiveContainer width="100%" height={250}>
               <ComposedChart data={txVolData} margin={{ top: 6, right: 8, left: 0, bottom: 0 }}>
-                {gradient('dashTxVol', C.primary)}
+                {gradient('dashTxVol', CHART_COLORS.transactions)}
                 <CartesianGrid {...GRID} />
                 <XAxis dataKey="m" tickLine={false} axisLine={false} interval={0} tick={renderMonthTick} />
                 <YAxis {...yAxis()} />
@@ -5017,7 +5062,7 @@ function DashboardTab({ allYears }) {
                 <Area
                   type="monotone"
                   dataKey="Volume"
-                  stroke={C.primary}
+                  stroke={CHART_COLORS.transactions}
                   strokeWidth={2.4}
                   fill="url(#dashTxVol)"
                   dot={false}
