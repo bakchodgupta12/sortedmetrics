@@ -171,6 +171,9 @@ export const METRIC_GROUPS = {
         { key: 'c_sold', label: 'Cards Sold', unit: 'count' },
         { key: 'c_valueDistributed', label: 'Cards Volume', unit: 'usdt' },
         { key: 'c_fundsCollected', label: 'Funds Collected', unit: 'usdt' },
+        // Monthly Cost of Sales — a stored value (per-batch discount spread
+        // allocated to the payment month), not Cards Volume − Funds Collected.
+        { key: 'c_costOfSales', label: 'Cost of Sales', unit: 'usdt' },
         { key: 'c_grossRevenue', label: 'Gross Revenue', unit: 'usdt' },
         { key: 'c_uniqueUsers', label: 'Unique Users', unit: 'count' },
         // Retired Activity fields — kept in the model so historical data loads.

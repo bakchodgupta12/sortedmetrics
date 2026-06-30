@@ -2893,13 +2893,15 @@ function CardsTab({ yearData, updateMetric, allYears, activeYear, cardBatches, c
 function CardsMonthlyView({ yearData, updateMetric, allYears, activeYear, cardBatches = [], cardCountryUsers }) {
   const latest = latestMonthIndex(yearData);
   const sold = rawSeries(yearData, 'c_sold');
-  const cardsVolume = rawSeries(yearData, 'c_valueDistributed');
-  const fundsCollected = rawSeries(yearData, 'c_fundsCollected');
   const grossRevenue = rawSeries(yearData, 'c_grossRevenue');
   const uniqueUsers = rawSeries(yearData, 'c_uniqueUsers');
 
-  // Card-channel cost, acquisition and profitability.
-  const costOfSales = diffSeries(cardsVolume, fundsCollected);
+  // Monthly Cost of Sales is a STORED value (c_costOfSales) — computed
+  // externally from per-batch discount spread and allocated to the payment
+  // month. It is NOT this month's Cards Volume − Funds Collected: those two
+  // totals are sourced from different batch sets, so subtracting them yielded a
+  // meaningless figure. Absent month → blank (the standard empty-cell rule).
+  const costOfSales = rawSeries(yearData, 'c_costOfSales');
   const cacPerUser = ratioSeries(costOfSales, uniqueUsers);
   // Net Revenue only means something once Gross Revenue is entered for the
   // month — a net built from a missing gross is misleading, so blank it.
@@ -2907,11 +2909,10 @@ function CardsMonthlyView({ yearData, updateMetric, allYears, activeYear, cardBa
     grossRevenue[i] == null ? null : grossRevenue[i] - (costOfSales[i] || 0)
   );
 
-  // YTD figures. Cost of Sales sums; Net Revenue sums the months that have a
-  // gross; unique users can't be summed, so CAC has no meaningful YTD.
-  const volY = seriesSum(cardsVolume, latest);
-  const fundsY = seriesSum(fundsCollected, latest);
-  const costOfSalesY = volY == null && fundsY == null ? null : (volY || 0) - (fundsY || 0);
+  // YTD figures. Cost of Sales sums the stored monthly values; Net Revenue sums
+  // the months that have a gross; unique users can't be summed, so CAC has no
+  // meaningful YTD.
+  const costOfSalesY = seriesSum(costOfSales, latest);
   const netRevY = seriesSum(netRevenue, latest);
 
   // Lifetime = all-time, the same figure in every year view (summed across ALL
@@ -2971,7 +2972,7 @@ function CardsMonthlyView({ yearData, updateMetric, allYears, activeYear, cardBa
       unit: 'usdt',
       info: 'The funds remitted back to Sorted by ambassadors and distributors.',
     },
-    calc('Cost of Sales', 'usdt', costOfSales, costOfSalesY, 'The costs involved in selling the top-up cards. Calculated as Cards Volume − Funds Collected.'),
+    calc('Cost of Sales', 'usdt', costOfSales, costOfSalesY, 'The costs involved in selling the top-up cards — the per-batch discount spread, allocated to the month its payments landed.'),
     {
       kind: 'input',
       key: 'c_uniqueUsers',
@@ -4110,14 +4111,14 @@ function cardsByMonthCsv(yearData) {
   const funds = rawSeries(yearData, 'c_fundsCollected');
   const gross = rawSeries(yearData, 'c_grossRevenue');
   const users = rawSeries(yearData, 'c_uniqueUsers');
-  const cost = diffSeries(vol, funds);
+  const cost = rawSeries(yearData, 'c_costOfSales'); // stored, not vol − funds
   const cac = ratioSeries(cost, users);
   const net = IDX.map((i) => (gross[i] == null ? null : gross[i] - (cost[i] || 0)));
   const latest = latestMonthIndex(yearData);
   const sum = (s) => seriesSum(s, latest);
   const volY = sum(vol);
   const fundsY = sum(funds);
-  const costY = volY == null && fundsY == null ? null : (volY || 0) - (fundsY || 0);
+  const costY = sum(cost);
   const defs = [
     ['Cards Sold', sold, sum(sold)],
     ['Cards Volume', vol, volY],
