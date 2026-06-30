@@ -1023,21 +1023,23 @@ function withDollar(formatted) {
   return formatted.startsWith('-') ? `-$${formatted.slice(1)}` : `$${formatted}`;
 }
 
-// Render the fractional part of a formatted number one size smaller than the
-// integer part — a subtle, page-wide refinement so ".71" in "$852,619.71" or
-// ".84" in "13.84%" reads slightly smaller (same colour/weight). Returns the
-// original string when there's no decimal point. This is a RENDER helper (it
-// returns JSX); the plain-string formatters are untouched, so CSV exports, chart
-// tick/tooltip strings, and document.title keep their flat text.
+// Render the fractional part of a formatted number smaller AND non-bold, while
+// the integer part keeps the value's existing (bold) size/weight — a subtle
+// refinement used ONLY on KPI card values (Dashboard hero/stat cards, the Cards
+// lifetime KPI strip), never in tables. So "$852,619.71" → "$852,619" bold/large
+// with ".71" smaller/normal; "13.84%" → "13" then ".84%" smaller/normal. The
+// post-decimal span runs to the end of the string so a trailing "%", "k", "m"
+// rides along with the decimals. Returns the original string when there's no
+// decimal point. RENDER helper (returns JSX) — the plain-string formatters are
+// untouched, so tables, CSV exports, chart strings and document.title stay flat.
 function withSmallDecimals(formatted) {
   if (typeof formatted !== 'string') return formatted;
-  const m = formatted.match(/^(.*?)(\.\d+)(.*)$/);
+  const m = formatted.match(/^(.*?)(\.\d.*)$/);
   if (!m) return formatted;
   return (
     <>
       {m[1]}
-      <span style={{ fontSize: '0.8em' }}>{m[2]}</span>
-      {m[3]}
+      <span style={{ fontSize: '0.8em', fontWeight: 400 }}>{m[2]}</span>
     </>
   );
 }
@@ -1224,7 +1226,7 @@ function Cell({ value, unit, onCommit, inputStyle, placeholder = DASH, compact =
           ...inputStyle,
         }}
       >
-        {value == null ? placeholder : withSmallDecimals(fmtRest(value))}
+        {value == null ? placeholder : fmtRest(value)}
       </span>
     );
   }
@@ -1917,7 +1919,7 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
                       </td>
                     )}
                     <td style={{ ...summaryCell, fontSize: 13, fontWeight: 700, color: ytd == null ? C.gray400 : C.text }}>
-                      {row.ytd === 'none' ? '' : ytd == null ? DASH : withSmallDecimals(fmtMoney(ytd, row.unit))}
+                      {row.ytd === 'none' ? '' : ytd == null ? DASH : fmtMoney(ytd, row.unit)}
                     </td>
                   </tr>
                 </React.Fragment>
@@ -1970,13 +1972,13 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
                             background: colTint(i),
                           }}
                         >
-                          {v != null ? withSmallDecimals(fmtMoney(v, row.unit)) : isBanded(i) ? '' : DASH}
+                          {v != null ? fmtMoney(v, row.unit) : isBanded(i) ? '' : DASH}
                         </td>
                       );
                     })}
                     {hasUp && upBandCell}
                     <td style={{ ...summaryCell, fontSize: 13, fontWeight: 700, color: ytd == null ? C.gray400 : C.text }}>
-                      {ytd == null ? DASH : withSmallDecimals(fmtMoney(ytd, row.unit))}
+                      {ytd == null ? DASH : fmtMoney(ytd, row.unit)}
                     </td>
                   </tr>
                 </React.Fragment>
@@ -2048,12 +2050,7 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
                         ...(isBanded(i) ? { background: colTint(i) } : null),
                       }}
                     >
-                      {v != null ? (
-                        <>
-                          {withSmallDecimals(fmtMoney(v, row.unit))}
-                          {over100 ? '*' : ''}
-                        </>
-                      ) : isBanded(i) ? '' : DASH}
+                      {v != null ? `${fmtMoney(v, row.unit)}${over100 ? '*' : ''}` : isBanded(i) ? '' : DASH}
                     </td>
                   );
                 })}
@@ -2067,7 +2064,7 @@ function MetricTable({ yearData, rows, updateMetric, totalLabel = 'YTD', preLaun
                     color: isNum(row.ytd) && row.ytd < 0 ? (row.negGood ? SUCCESS : DANGER) : row.ytd == null ? C.gray400 : C.text,
                   }}
                 >
-                  {row.blankTotal ? '' : row.ytd == null ? DASH : withSmallDecimals(fmtMoney(row.ytd, row.unit))}
+                  {row.blankTotal ? '' : row.ytd == null ? DASH : fmtMoney(row.ytd, row.unit)}
                 </td>
               </tr>
             );
@@ -2138,7 +2135,7 @@ function ChartTooltip({ active, payload, label, fmt, reported }) {
       ) : (
         rows.map((p) => (
           <div key={p.dataKey} style={{ color: p.color || p.stroke }}>
-            {p.name}: {p.value == null ? DASH : withSmallDecimals(f(p.value))}
+            {p.name}: {p.value == null ? DASH : f(p.value)}
           </div>
         ))
       )}
@@ -2843,7 +2840,7 @@ function CardsActivityTooltip({ active, payload, label, reported }) {
       ) : (
         rows.map((p) => (
           <div key={p.dataKey} style={{ color: p.color || p.stroke }}>
-            {p.name}: {p.value == null ? DASH : withSmallDecimals(p.dataKey === 'Cards / User' ? p.value.toFixed(2) : fmtNumber(p.value))}
+            {p.name}: {p.value == null ? DASH : p.dataKey === 'Cards / User' ? p.value.toFixed(2) : fmtNumber(p.value)}
           </div>
         ))
       )}
@@ -3314,7 +3311,7 @@ function CardsByCountryView({ batches, countryUsers, updateRoot }) {
   // recovered) and reads green; other columns keep negative = red.
   const num = (val, unit, bold, negGood) => (
     <td style={{ textAlign: 'right', fontSize: 13, fontWeight: bold ? 700 : 600, padding: '12px 12px', color: isNum(val) && val < 0 ? (negGood ? SUCCESS : DANGER) : undefined }}>
-      {val == null ? DASH : withSmallDecimals(fmtByUnit(val, unit))}
+      {val == null ? DASH : fmtByUnit(val, unit)}
     </td>
   );
 
@@ -3524,7 +3521,7 @@ function CardsBatchesView({ batches, countryUsers, updateRoot }) {
   // is GOOD (money recovered) and reads green; otherwise negative = red.
   const cCell = (val, unit, negGood) => (
     <td style={{ textAlign: 'right', fontSize: 13, padding: '8px 8px', color: isNum(val) && val < 0 ? (negGood ? SUCCESS : DANGER) : C.text }}>
-      {val == null ? DASH : withSmallDecimals(fmtByUnit(val, unit))}
+      {val == null ? DASH : fmtByUnit(val, unit)}
     </td>
   );
   // Pinned (sticky-bottom) totals row — opaque background so rows don't show
@@ -3533,7 +3530,7 @@ function CardsBatchesView({ batches, countryUsers, updateRoot }) {
   const fStick = { position: 'sticky', bottom: 0, zIndex: 1, background: FOOTER_BG };
   const fCell = (val, unit, negGood) => (
     <td style={{ ...fStick, textAlign: 'right', fontSize: 13, fontWeight: 700, padding: '10px 8px', color: isNum(val) && val < 0 ? (negGood ? SUCCESS : DANGER) : undefined }}>
-      {val == null ? DASH : withSmallDecimals(fmtByUnit(val, unit))}
+      {val == null ? DASH : fmtByUnit(val, unit)}
     </td>
   );
 
@@ -4499,8 +4496,8 @@ function TrendTooltip({ active, label, reported, installs, users }) {
         <div style={{ color: C.muted }}>Not yet reported</div>
       ) : (
         <>
-          <div style={{ color: CHART_COLORS.installs }}>Installs: {installs[i] == null ? DASH : withSmallDecimals(fmtNumber(installs[i]))}</div>
-          <div style={{ color: CHART_COLORS.users }}>Active Users: {users[i] == null ? DASH : withSmallDecimals(fmtNumber(users[i]))}</div>
+          <div style={{ color: CHART_COLORS.installs }}>Installs: {installs[i] == null ? DASH : fmtNumber(installs[i])}</div>
+          <div style={{ color: CHART_COLORS.users }}>Active Users: {users[i] == null ? DASH : fmtNumber(users[i])}</div>
         </>
       )}
     </div>
@@ -4988,8 +4985,6 @@ function DashboardTab({ allYears }) {
             </div>
           )}
         </div>
-        <div style={{ flex: 1, minWidth: 8 }} />
-        <DownloadButton label="Download all" />
       </div>
 
       {/* ── ROW 1 · Lifetime headline scale (hero) ───────────────────────── */}
