@@ -313,6 +313,16 @@ export function normaliseData(data) {
     safe.cardCountryUsers && typeof safe.cardCountryUsers === 'object'
       ? { ...safe.cardCountryUsers }
       : {};
+  // Campaigns ledgers live at the ROOT (month-less, like the card batches):
+  // Digital = one row per channel per month; Activations = one row per offline
+  // community campaign. Calculated fields (CPI, success rate, cost-per-user,
+  // totals) are derived at render, never stored.
+  out.campaignsDigital = Array.isArray(safe.campaignsDigital)
+    ? safe.campaignsDigital.filter((c) => c && typeof c === 'object')
+    : [];
+  out.campaignsActivations = Array.isArray(safe.campaignsActivations)
+    ? safe.campaignsActivations.filter((c) => c && typeof c === 'object')
+    : [];
   return out;
 }
 

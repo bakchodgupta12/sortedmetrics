@@ -625,21 +625,6 @@ function Dashboard({ user, setUser, onLogout }) {
     [activeYear, canEdit]
   );
 
-  // Set a free-form field on the active year (e.g. the Campaigns list / KPI
-  // strip, which don't fit the metric/month grid). Owners only.
-  const updateYearField = useCallback(
-    (field, value) => {
-      if (!canEdit) return;
-      setData((prev) => {
-        if (!prev) return prev;
-        const y = String(activeYear);
-        const year = prev.years[y] || emptyYear();
-        return { ...prev, years: { ...prev.years, [y]: { ...year, [field]: value } } };
-      });
-    },
-    [activeYear, canEdit]
-  );
-
   // Set a ROOT-level field (not under a year) — e.g. the Top-up Cards batch log
   // and per-country manual unique-users, which are cumulative / month-less.
   const updateRoot = useCallback(
@@ -717,10 +702,11 @@ function Dashboard({ user, setUser, onLogout }) {
             canEdit={canEdit}
             updateMetric={updateMetric}
             updateNote={updateNote}
-            updateYearField={updateYearField}
             updateRoot={updateRoot}
             cardBatches={data.cardBatches || []}
             cardCountryUsers={data.cardCountryUsers || {}}
+            campaignsDigital={data.campaignsDigital || []}
+            campaignsActivations={data.campaignsActivations || []}
           />
         </main>
       </div>
@@ -3844,47 +3830,136 @@ function RevenueTab({ yearData, updateMetric, activeYear }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Campaigns tab — a manual KPI strip over an editable campaign list. Every
-// field (KPIs included) is entered by hand for now; attribution and computed
-// CPI come in a later phase. Data lives on the year as `campaignKpis` +
-// `campaigns` (free-form, persisted via updateYearField).
+// Campaigns tab — two manual ledgers stored at the data root (like the card
+// batches): Digital (one row per channel per month) and Activations (one row
+// per offline community campaign). KPIs and per-row ratios are computed live at
+// render; nothing derived is stored.
 // ─────────────────────────────────────────────────────────────────────────────
-const CAMPAIGN_KPIS = [
-  { key: 'active', label: 'Active Campaigns', unit: 'count' },
-  { key: 'spend', label: 'Total Spend', unit: 'usd' },
-  { key: 'installs', label: 'Attributed Installs', unit: 'count' },
-  { key: 'cpi', label: 'Blended CPI', unit: 'ratio' },
-];
+const DIGITAL_CHANNELS = ['KaiStore', 'Avow', 'Transsion', 'Vox'];
+const ENGAGEMENT_TYPES = ['Activation', 'Event'];
+const CAMPAIGN_STATUS = ['Completed', 'Active', 'Paused'];
+const ACTIVATION_RESULTS = ['Success', 'Failure'];
 
-const CAMPAIGN_STATUSES = ['Active', 'Paused', 'Ended'];
-const STATUS_STYLE = {
+const PILL_BASE = { padding: '4px 11px', borderRadius: 20, fontSize: 11, fontWeight: 700 };
+const CAMPAIGN_STATUS_STYLE = {
+  Completed: { background: 'rgba(0,17,168,0.10)', color: C.primary },
   Active: { background: 'rgba(31,138,77,0.12)', color: '#1f8a4d' },
   Paused: { background: 'rgba(160,140,40,0.14)', color: '#9a7a10' },
-  Ended: { background: 'rgba(120,120,130,0.12)', color: '#6a6a74' },
+};
+const RESULT_STYLE = {
+  Success: { background: 'rgba(31,138,77,0.12)', color: '#1f8a4d' },
+  Failure: { background: 'rgba(255,0,68,0.10)', color: C.red },
 };
 
-function newCampaignId(existing) {
-  // Stable-enough unique id without colliding with existing rows.
+// Stable, collision-free row id with a given prefix.
+function newSeqId(existing, prefix) {
   let n = existing.length + 1;
-  const has = (id) => existing.some((c) => c.id === id);
-  while (has(`camp_${n}`)) n += 1;
-  return `camp_${n}`;
+  const has = (id) => existing.some((e) => e.id === id);
+  while (has(`${prefix}_${n}`)) n += 1;
+  return `${prefix}_${n}`;
 }
 
-function StatusPill({ status }) {
-  const s = STATUS_STYLE[status] || STATUS_STYLE.Ended;
+// A status / result chip: a coloured <select> for editors, a static pill for
+// members. Shared by both campaign ledgers.
+function PillSelect({ value, options, styleMap, onChange }) {
+  const editable = useContext(EditableContext);
+  const v = value || options[0];
+  const st = styleMap[v] || {};
+  if (!editable) return <span style={{ ...PILL_BASE, ...st }}>{v}</span>;
   return (
-    <span
+    <select
+      value={v}
+      onChange={(e) => onChange(e.target.value)}
+      style={{ ...PILL_BASE, ...st, border: 'none', fontFamily: 'inherit', cursor: 'pointer', outline: 'none' }}
+    >
+      {options.map((o) => (
+        <option key={o} value={o}>
+          {o}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+// A plain enum <select> for editors (Channel, Engagement Type); muted text for
+// members. Subtle dashed underline matches the free-text TextCell.
+function EnumCell({ value, options, onChange, placeholder = 'Select' }) {
+  const editable = useContext(EditableContext);
+  if (!editable) {
+    return <span style={{ fontSize: 13, color: value ? C.text : C.gray400 }}>{value || DASH}</span>;
+  }
+  return (
+    <select
+      value={value || ''}
+      onChange={(e) => onChange(e.target.value)}
       style={{
-        ...s,
-        padding: '4px 11px',
-        borderRadius: 20,
-        fontSize: 11,
-        fontWeight: 700,
+        fontFamily: 'inherit',
+        fontSize: 13,
+        color: value ? C.text : C.gray400,
+        background: 'transparent',
+        border: 'none',
+        borderBottom: `1px dashed ${C.gray300}`,
+        padding: '5px 2px',
+        outline: 'none',
+        cursor: 'pointer',
       }}
     >
-      {status}
-    </span>
+      {!value && <option value="">{placeholder}</option>}
+      {options.map((o) => (
+        <option key={o} value={o}>
+          {o}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+// A month cell: a native month picker for editors, "May 2026" text for members.
+// Stored as an ISO "YYYY-MM" string.
+function MonthCell({ value, onChange }) {
+  const editable = useContext(EditableContext);
+  const p = parseMonthInput(value);
+  if (!editable) {
+    return <span style={{ fontSize: 13, color: value ? C.text : C.gray400 }}>{p ? fmtPeriod(p) : DASH}</span>;
+  }
+  return (
+    <input
+      type="month"
+      value={value || ''}
+      onChange={(e) => onChange(e.target.value)}
+      style={{
+        fontFamily: 'inherit',
+        fontSize: 13,
+        color: C.text,
+        background: 'transparent',
+        border: 'none',
+        borderBottom: `1px dashed ${C.gray300}`,
+        padding: '5px 2px',
+        outline: 'none',
+      }}
+    />
+  );
+}
+
+// KPI strip atop each Campaigns sub-tab — brand KPI cards with the page-wide
+// smaller/non-bold decimals on the value.
+function KpiStrip({ items }) {
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
+      {items.map((it) => (
+        <div
+          key={it.label}
+          style={{ flex: '1 1 0', minWidth: 180, border: `1px solid ${CARD_BORDER}`, borderRadius: 14, padding: '16px 18px', background: C.card }}
+        >
+          <div style={{ fontSize: 10.5, fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase', color: C.muted }}>
+            {it.label}
+          </div>
+          <div style={{ fontFamily: 'var(--font-head)', fontSize: 26, fontWeight: 700, marginTop: 8, color: C.text }}>
+            {withSmallDecimals(it.value)}
+          </div>
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -3928,223 +4003,318 @@ function TextCell({ value, placeholder, onCommit, bold }) {
   );
 }
 
-function CampaignsTab({ yearData, updateYearField, activeYear }) {
-  const editable = useContext(EditableContext);
-  const campaigns = Array.isArray(yearData.campaigns) ? yearData.campaigns : [];
-  const kpis = yearData.campaignKpis || {};
+// Sum a numeric field across ledger rows; null when no row holds a value (so the
+// total reads as a dash, never a stored 0).
+function ledgerSum(rows, key) {
+  let t = 0;
+  let any = false;
+  for (const r of rows) if (isNum(r[key])) { t += r[key]; any = true; }
+  return any ? t : null;
+}
 
-  const setKpi = (key, value) => updateYearField('campaignKpis', { ...kpis, [key]: value });
-  const setCampaigns = (next) => updateYearField('campaigns', next);
-  const updateRow = (id, patch) =>
-    setCampaigns(campaigns.map((c) => (c.id === id ? { ...c, ...patch } : c)));
-  const addRow = () =>
-    setCampaigns([
-      ...campaigns,
-      {
-        id: newCampaignId(campaigns),
-        name: '',
-        channel: '',
-        spend: null,
-        installs: null,
-        cpi: null,
-        conv: null,
-        status: 'Active',
-      },
-    ]);
-  const removeRow = (id) => setCampaigns(campaigns.filter((c) => c.id !== id));
-
-  const th = (label, align = 'right', pad = '13px 12px') => (
-    <th style={{ ...thBase, textAlign: align, padding: pad }}>{label}</th>
+// Shared ledger chrome — the small × remove button and the "+ Add" footer bar.
+function RemoveBtn({ onClick, title }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      style={{ border: 'none', background: 'transparent', color: C.gray400, cursor: 'pointer', fontSize: 16, lineHeight: 1, padding: 2 }}
+    >
+      ×
+    </button>
   );
-  const numTd = (row, key, unit) => (
-    <td style={{ textAlign: 'right', padding: '6px 8px' }}>
-      <Cell value={row[key]} unit={unit} onCommit={(v) => updateRow(row.id, { [key]: v })} />
+}
+function AddRowBar({ label, onClick }) {
+  return (
+    <div style={{ padding: '12px 16px', borderTop: `1px solid ${C.gray200}` }}>
+      <button
+        type="button"
+        onClick={onClick}
+        style={{ border: `1px solid ${C.border}`, background: '#fff', borderRadius: 8, padding: '7px 14px', fontSize: 13, fontWeight: 600, color: C.primary, cursor: 'pointer' }}
+      >
+        {label}
+      </button>
+    </div>
+  );
+}
+
+const ledgerHead = (label, align = 'right') => (
+  <th style={{ ...thBase, textAlign: align, padding: align === 'left' ? '12px 14px' : '12px 8px', background: C.gray100 }}>
+    {label}
+  </th>
+);
+
+function CampaignsTab({ campaignsDigital, campaignsActivations, updateRoot, activeYear }) {
+  const [sub, setSub] = useState('Digital');
+  // Export the active sub-tab's ledger as CSV (raw values).
+  const onDownload = () => {
+    if (sub === 'Activations') {
+      downloadTextFile(`sorted-campaigns-activations-${activeYear}.csv`, campaignsActivationsCsv(campaignsActivations));
+    } else {
+      downloadTextFile(`sorted-campaigns-digital-${activeYear}.csv`, campaignsDigitalCsv(campaignsDigital));
+    }
+  };
+  return (
+    <div style={{ display: 'grid', gap: 16, gridTemplateColumns: 'minmax(0, 1fr)' }}>
+      <Card>
+        <TabTitle title="Campaigns" onDownload={onDownload} />
+        <SubTabBar tabs={['Digital', 'Activations']} active={sub} onChange={setSub} />
+      </Card>
+      {sub === 'Digital' ? (
+        <CampaignsDigitalView rows={campaignsDigital} updateRoot={updateRoot} />
+      ) : (
+        <CampaignsActivationsView rows={campaignsActivations} updateRoot={updateRoot} />
+      )}
+    </div>
+  );
+}
+
+// Sub-tab 1 — Digital. One row per channel per month. CPI is computed live
+// (Spend ÷ Installs); the footer carries the blended figures.
+function CampaignsDigitalView({ rows, updateRoot }) {
+  const editable = useContext(EditableContext);
+  const setRows = (next) => updateRoot('campaignsDigital', next);
+  const updateRow = (id, patch) => setRows(rows.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+  const removeRow = (id) => setRows(rows.filter((r) => r.id !== id));
+  const addRow = () =>
+    setRows([
+      ...rows,
+      { id: newSeqId(rows, 'dig'), channel: DIGITAL_CHANNELS[0], period: '', clicks: null, installs: null, spend: null, users: null, status: 'Active' },
+    ]);
+
+  const totClicks = ledgerSum(rows, 'clicks');
+  const totInstalls = ledgerSum(rows, 'installs');
+  const totSpend = ledgerSum(rows, 'spend');
+  const totUsers = ledgerSum(rows, 'users');
+  const blendedCpi = safeDiv(totSpend, totInstalls);
+
+  const numTd = (r, key, unit) => (
+    <td style={{ textAlign: 'right', padding: '4px 6px' }}>
+      <Cell value={isNum(r[key]) ? r[key] : null} unit={unit} onCommit={(v) => updateRow(r.id, { [key]: v })} />
     </td>
   );
+  const calcTd = (val, unit) => (
+    <td style={{ textAlign: 'right', fontSize: 13, padding: '8px 8px', color: val == null ? C.gray400 : C.text }}>
+      {val == null ? DASH : fmtByUnit(val, unit)}
+    </td>
+  );
+  const fCell = (val, unit) => (
+    <td style={{ textAlign: 'right', fontSize: 13, fontWeight: 700, padding: '10px 8px', color: val == null ? C.gray400 : C.text }}>
+      {val == null ? DASH : fmtByUnit(val, unit)}
+    </td>
+  );
+  const colSpanAll = editable ? 9 : 8;
 
   return (
     <div style={{ display: 'grid', gap: 16, gridTemplateColumns: 'minmax(0, 1fr)' }}>
-      <Card accent={C.primary}>
-        <TabTitle
-          title="Campaigns"
-          accent={C.blue}
-          downloadLabel="Download all"
-          onDownload={() => downloadTextFile(`sorted-campaigns-${activeYear}.csv`, campaignsCsv(yearData))}
-        />
-        <p style={{ fontSize: 13, color: C.muted, marginTop: -4, marginBottom: 16 }}>
-          Acquisition campaigns and performance. All figures are entered manually
-          for now — attribution and computed CPI come in a later phase.
-        </p>
-
-        {/* KPI strip — manual headline figures */}
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
-            gap: 14,
-          }}
-        >
-          {CAMPAIGN_KPIS.map((k) => (
-            <div
-              key={k.key}
-              style={{
-                background: C.card,
-                border: `1px solid ${CARD_BORDER}`,
-                borderRadius: 14,
-                padding: '16px 18px',
-              }}
-            >
-              <div
-                style={{
-                  fontSize: 10.5,
-                  fontWeight: 600,
-                  letterSpacing: '0.05em',
-                  textTransform: 'uppercase',
-                  color: C.muted,
-                }}
-              >
-                {k.label}
-              </div>
-              <div style={{ marginTop: 8 }}>
-                <Cell
-                  value={kpis[k.key] == null ? null : kpis[k.key]}
-                  unit={k.unit}
-                  onCommit={(v) => setKpi(k.key, v)}
-                  inputStyle={{
-                    fontFamily: 'var(--font-head)',
-                    fontSize: 26,
-                    fontWeight: 700,
-                    textAlign: 'left',
-                    padding: 0,
-                  }}
-                />
-              </div>
-            </div>
-          ))}
-        </div>
-      </Card>
-
-      {/* Campaign list */}
-      <Card accent={C.primary} style={{ padding: 0, overflow: 'hidden' }}>
+      <KpiStrip
+        items={[
+          { label: 'Total Digital Spend', value: fmtByUnit(totSpend, 'usd') },
+          { label: 'Total Installs', value: fmtByUnit(totInstalls, 'count') },
+          { label: 'Blended CPI', value: fmtByUnit(blendedCpi, 'ratio') },
+          { label: 'Total Users', value: fmtByUnit(totUsers, 'count') },
+        ]}
+      />
+      <Card style={{ padding: 0, overflow: 'hidden' }}>
         <div style={{ overflowX: 'auto' }}>
-          <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 820 }}>
+          <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 920 }}>
             <thead>
-              <tr style={{ background: C.gray100 }}>
-                {th('Campaign', 'left', '13px 16px')}
-                {th('Channel', 'left')}
-                {th('Spend')}
-                {th('Installs')}
-                {th('CPI')}
-                {th('Conv.')}
-                {th('Status')}
-                {editable && <th style={{ ...thBase, width: 36, padding: '13px 8px' }} />}
+              <tr>
+                {ledgerHead('Channel', 'left')}
+                {ledgerHead('Period', 'left')}
+                {ledgerHead('Clicks')}
+                {ledgerHead('Installs')}
+                {ledgerHead('CPI')}
+                {ledgerHead('Spend')}
+                {ledgerHead('Users')}
+                {ledgerHead('Status', 'left')}
+                {editable && <th style={{ ...thBase, width: 36, padding: '12px 8px', background: C.gray100 }} />}
               </tr>
             </thead>
             <tbody>
-              {campaigns.length === 0 ? (
+              {rows.length === 0 ? (
                 <tr style={{ borderTop: `1px solid ${C.gray200}` }}>
-                  <td
-                    colSpan={editable ? 8 : 7}
-                    style={{ padding: '20px 16px', color: C.muted, fontSize: 13, textAlign: 'center' }}
-                  >
-                    No campaigns yet.{editable ? ' Add one below to get started.' : ''}
+                  <td colSpan={colSpanAll} style={{ padding: '20px 16px', color: C.muted, fontSize: 13, textAlign: 'center' }}>
+                    No digital campaigns yet.{editable ? ' Add a row to get started.' : ''}
                   </td>
                 </tr>
               ) : (
-                campaigns.map((row) => (
-                  <tr key={row.id} style={{ borderTop: `1px solid ${C.gray200}` }}>
-                    <td style={{ textAlign: 'left', padding: '6px 16px', minWidth: 150 }}>
-                      <TextCell
-                        value={row.name}
-                        placeholder="Campaign name"
-                        bold
-                        onCommit={(v) => updateRow(row.id, { name: v })}
-                      />
+                rows.map((r) => (
+                  <tr key={r.id} style={{ borderTop: `1px solid ${C.gray200}` }}>
+                    <td style={{ textAlign: 'left', padding: '6px 14px', minWidth: 120 }}>
+                      <EnumCell value={r.channel} options={DIGITAL_CHANNELS} onChange={(v) => updateRow(r.id, { channel: v })} placeholder="Channel" />
                     </td>
-                    <td style={{ textAlign: 'left', padding: '6px 12px', minWidth: 110 }}>
-                      <TextCell
-                        value={row.channel}
-                        placeholder="Channel"
-                        onCommit={(v) => updateRow(row.id, { channel: v })}
-                      />
+                    <td style={{ textAlign: 'left', padding: '6px 12px', minWidth: 120 }}>
+                      <MonthCell value={r.period} onChange={(v) => updateRow(r.id, { period: v })} />
                     </td>
-                    {numTd(row, 'spend', 'usd')}
-                    {numTd(row, 'installs', 'count')}
-                    {numTd(row, 'cpi', 'ratio')}
-                    {numTd(row, 'conv', 'percent')}
-                    <td style={{ textAlign: 'right', padding: '6px 12px' }}>
-                      {editable ? (
-                        <select
-                          value={row.status || 'Active'}
-                          onChange={(e) => updateRow(row.id, { status: e.target.value })}
-                          style={{
-                            ...(STATUS_STYLE[row.status] || STATUS_STYLE.Active),
-                            border: 'none',
-                            borderRadius: 20,
-                            padding: '4px 10px',
-                            fontSize: 11,
-                            fontWeight: 700,
-                            fontFamily: 'inherit',
-                            cursor: 'pointer',
-                            outline: 'none',
-                          }}
-                        >
-                          {CAMPAIGN_STATUSES.map((s) => (
-                            <option key={s} value={s}>
-                              {s}
-                            </option>
-                          ))}
-                        </select>
-                      ) : (
-                        <StatusPill status={row.status || 'Active'} />
-                      )}
+                    {numTd(r, 'clicks', 'count')}
+                    {numTd(r, 'installs', 'count')}
+                    {calcTd(safeDiv(r.spend, r.installs), 'ratio')}
+                    {numTd(r, 'spend', 'usd')}
+                    {numTd(r, 'users', 'count')}
+                    <td style={{ textAlign: 'left', padding: '6px 12px' }}>
+                      <PillSelect value={r.status} options={CAMPAIGN_STATUS} styleMap={CAMPAIGN_STATUS_STYLE} onChange={(v) => updateRow(r.id, { status: v })} />
                     </td>
                     {editable && (
                       <td style={{ textAlign: 'center', padding: '6px 8px' }}>
-                        <button
-                          type="button"
-                          onClick={() => removeRow(row.id)}
-                          title="Remove campaign"
-                          style={{
-                            border: 'none',
-                            background: 'transparent',
-                            color: C.gray400,
-                            cursor: 'pointer',
-                            fontSize: 16,
-                            lineHeight: 1,
-                            padding: 2,
-                          }}
-                        >
-                          ×
-                        </button>
+                        <RemoveBtn onClick={() => removeRow(r.id)} title="Remove row" />
                       </td>
                     )}
                   </tr>
                 ))
               )}
+              {rows.length > 0 && (
+                <tr style={{ background: CALC_LABEL_BG, borderTop: `1px solid ${C.border}` }}>
+                  <td style={{ textAlign: 'left', fontWeight: 700, fontSize: 13, padding: '10px 14px' }}>Total</td>
+                  <td />
+                  {fCell(totClicks, 'count')}
+                  {fCell(totInstalls, 'count')}
+                  {fCell(blendedCpi, 'ratio')}
+                  {fCell(totSpend, 'usd')}
+                  {fCell(totUsers, 'count')}
+                  <td />
+                  {editable && <td />}
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
-        {editable && (
-          <div style={{ padding: '12px 16px', borderTop: `1px solid ${C.gray200}` }}>
-            <button
-              type="button"
-              onClick={addRow}
-              style={{
-                border: `1px solid ${C.border}`,
-                background: '#fff',
-                borderRadius: 8,
-                padding: '7px 14px',
-                fontSize: 13,
-                fontWeight: 600,
-                color: C.primary,
-                cursor: 'pointer',
-              }}
-            >
-              + Add campaign
-            </button>
-          </div>
-        )}
+        {editable && <AddRowBar label="+ Add channel row" onClick={addRow} />}
+      </Card>
+    </div>
+  );
+}
+
+// Sub-tab 2 — Activations. One row per offline community campaign (users, not
+// installs). Success Rate and Cost Per User are computed live.
+function CampaignsActivationsView({ rows, updateRoot }) {
+  const editable = useContext(EditableContext);
+  const setRows = (next) => updateRoot('campaignsActivations', next);
+  const updateRow = (id, patch) => setRows(rows.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+  const removeRow = (id) => setRows(rows.filter((r) => r.id !== id));
+  const addRow = () =>
+    setRows([
+      ...rows,
+      {
+        id: newSeqId(rows, 'act'),
+        country: '',
+        partner: '',
+        engagementType: ENGAGEMENT_TYPES[0],
+        target: null,
+        usersAcquired: null,
+        totalCost: null,
+        status: 'Active',
+        result: 'Success',
+      },
+    ]);
+
+  const totTarget = ledgerSum(rows, 'target');
+  const totUsers = ledgerSum(rows, 'usersAcquired');
+  const totCost = ledgerSum(rows, 'totalCost');
+  const blendedCpu = safeDiv(totCost, totUsers);
+
+  const numTd = (r, key, unit) => (
+    <td style={{ textAlign: 'right', padding: '4px 6px' }}>
+      <Cell value={isNum(r[key]) ? r[key] : null} unit={unit} onCommit={(v) => updateRow(r.id, { [key]: v })} />
+    </td>
+  );
+  const calcTd = (val, unit) => (
+    <td style={{ textAlign: 'right', fontSize: 13, padding: '8px 8px', color: val == null ? C.gray400 : C.text }}>
+      {val == null ? DASH : fmtByUnit(val, unit)}
+    </td>
+  );
+  const fCell = (val, unit) => (
+    <td style={{ textAlign: 'right', fontSize: 13, fontWeight: 700, padding: '10px 8px', color: val == null ? C.gray400 : C.text }}>
+      {val == null ? DASH : fmtByUnit(val, unit)}
+    </td>
+  );
+  const colSpanAll = editable ? 11 : 10;
+
+  return (
+    <div style={{ display: 'grid', gap: 16, gridTemplateColumns: 'minmax(0, 1fr)' }}>
+      <KpiStrip
+        items={[
+          { label: 'Total Activations Spend', value: fmtByUnit(totCost, 'usd') },
+          { label: 'Total Users Acquired', value: fmtByUnit(totUsers, 'count') },
+          { label: 'Blended Cost Per User', value: fmtByUnit(blendedCpu, 'ratio') },
+        ]}
+      />
+      <Card style={{ padding: 0, overflow: 'hidden' }}>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 1080 }}>
+            <thead>
+              <tr>
+                {ledgerHead('Country', 'left')}
+                {ledgerHead('Community Partner', 'left')}
+                {ledgerHead('Engagement Type', 'left')}
+                {ledgerHead('Target')}
+                {ledgerHead('Users Acquired')}
+                {ledgerHead('Success Rate')}
+                {ledgerHead('Total Cost')}
+                {ledgerHead('Cost / User')}
+                {ledgerHead('Status', 'left')}
+                {ledgerHead('Result', 'left')}
+                {editable && <th style={{ ...thBase, width: 36, padding: '12px 8px', background: C.gray100 }} />}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.length === 0 ? (
+                <tr style={{ borderTop: `1px solid ${C.gray200}` }}>
+                  <td colSpan={colSpanAll} style={{ padding: '20px 16px', color: C.muted, fontSize: 13, textAlign: 'center' }}>
+                    No activations yet.{editable ? ' Add a row to get started.' : ''}
+                  </td>
+                </tr>
+              ) : (
+                rows.map((r) => (
+                  <tr key={r.id} style={{ borderTop: `1px solid ${C.gray200}` }}>
+                    <td style={{ textAlign: 'left', padding: '6px 14px', minWidth: 110 }}>
+                      <TextCell value={r.country} placeholder="Country" onCommit={(v) => updateRow(r.id, { country: v })} />
+                    </td>
+                    <td style={{ textAlign: 'left', padding: '6px 12px', minWidth: 140 }}>
+                      <TextCell value={r.partner} placeholder="Partner" onCommit={(v) => updateRow(r.id, { partner: v })} />
+                    </td>
+                    <td style={{ textAlign: 'left', padding: '6px 12px', minWidth: 120 }}>
+                      <EnumCell value={r.engagementType} options={ENGAGEMENT_TYPES} onChange={(v) => updateRow(r.id, { engagementType: v })} placeholder="Type" />
+                    </td>
+                    {numTd(r, 'target', 'count')}
+                    {numTd(r, 'usersAcquired', 'count')}
+                    {calcTd(pct(r.usersAcquired, r.target), 'percent')}
+                    {numTd(r, 'totalCost', 'usd')}
+                    {calcTd(safeDiv(r.totalCost, r.usersAcquired), 'ratio')}
+                    <td style={{ textAlign: 'left', padding: '6px 12px' }}>
+                      <PillSelect value={r.status} options={CAMPAIGN_STATUS} styleMap={CAMPAIGN_STATUS_STYLE} onChange={(v) => updateRow(r.id, { status: v })} />
+                    </td>
+                    <td style={{ textAlign: 'left', padding: '6px 12px' }}>
+                      <PillSelect value={r.result} options={ACTIVATION_RESULTS} styleMap={RESULT_STYLE} onChange={(v) => updateRow(r.id, { result: v })} />
+                    </td>
+                    {editable && (
+                      <td style={{ textAlign: 'center', padding: '6px 8px' }}>
+                        <RemoveBtn onClick={() => removeRow(r.id)} title="Remove row" />
+                      </td>
+                    )}
+                  </tr>
+                ))
+              )}
+              {rows.length > 0 && (
+                <tr style={{ background: CALC_LABEL_BG, borderTop: `1px solid ${C.border}` }}>
+                  <td style={{ textAlign: 'left', fontWeight: 700, fontSize: 13, padding: '10px 14px' }}>Total</td>
+                  <td />
+                  <td />
+                  {fCell(totTarget, 'count')}
+                  {fCell(totUsers, 'count')}
+                  <td />
+                  {fCell(totCost, 'usd')}
+                  {fCell(blendedCpu, 'ratio')}
+                  <td />
+                  <td />
+                  {editable && <td />}
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+        {editable && <AddRowBar label="+ Add activation" onClick={addRow} />}
       </Card>
     </div>
   );
@@ -4316,20 +4486,45 @@ function cardsByBatchCsv(batches) {
   return toCsv(out);
 }
 
-// Campaigns — the manual KPI strip plus the campaign list.
-function campaignsCsv(yearData) {
-  const kpis = yearData.campaignKpis || {};
-  const campaigns = Array.isArray(yearData.campaigns) ? yearData.campaigns : [];
+// Campaigns › Digital — one row per channel per month (raw values; CPI computed).
+function campaignsDigitalCsv(rows) {
+  const out = [['Channel', 'Period', 'Clicks', 'Installs', 'CPI', 'Spend', 'Users', 'Status']];
+  for (const r of rows) {
+    const p = parseMonthInput(r.period);
+    out.push([
+      r.channel,
+      p ? fmtPeriod(p) : r.period,
+      r.clicks,
+      r.installs,
+      safeDiv(r.spend, r.installs),
+      r.spend,
+      r.users,
+      r.status,
+    ]);
+  }
+  return toCsv(out);
+}
+
+// Campaigns › Activations — one row per offline campaign (raw values; success
+// rate and cost-per-user computed).
+function campaignsActivationsCsv(rows) {
   const out = [
-    ['Campaign KPIs'],
-    ['Active Campaigns', kpis.active],
-    ['Total Spend', kpis.spend],
-    ['Attributed Installs', kpis.installs],
-    ['Blended CPI', kpis.cpi],
-    [],
-    ['Campaign', 'Channel', 'Status', 'Spend', 'Installs', 'CPI', 'Conversion'],
+    ['Country', 'Community Partner', 'Engagement Type', 'Target', 'Users Acquired', 'Success Rate %', 'Total Cost', 'Cost Per User', 'Status', 'Result'],
   ];
-  for (const c of campaigns) out.push([c.name, c.channel, c.status, c.spend, c.installs, c.cpi, c.conv]);
+  for (const r of rows) {
+    out.push([
+      r.country,
+      r.partner,
+      r.engagementType,
+      r.target,
+      r.usersAcquired,
+      pct(r.usersAcquired, r.target),
+      r.totalCost,
+      safeDiv(r.totalCost, r.usersAcquired),
+      r.status,
+      r.result,
+    ]);
+  }
   return toCsv(out);
 }
 
@@ -5199,10 +5394,11 @@ function TabContent({
   canEdit,
   updateMetric,
   updateNote,
-  updateYearField,
   updateRoot,
   cardBatches,
   cardCountryUsers,
+  campaignsDigital,
+  campaignsActivations,
   allYears,
 }) {
   const common = { yearData, activeYear, updateMetric, updateNote, allYears };
@@ -5225,7 +5421,14 @@ function TabContent({
     case 'Costs & Revenue':
       return <RevenueTab {...common} />;
     case 'Campaigns':
-      return <CampaignsTab yearData={yearData} updateYearField={updateYearField} activeYear={activeYear} />;
+      return (
+        <CampaignsTab
+          campaignsDigital={campaignsDigital}
+          campaignsActivations={campaignsActivations}
+          updateRoot={updateRoot}
+          activeYear={activeYear}
+        />
+      );
     case 'Settings':
       return <SettingsTab user={user} setUser={setUser} canEdit={canEdit} />;
     case 'Dashboard':
