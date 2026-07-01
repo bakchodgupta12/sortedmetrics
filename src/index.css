@@ -93,6 +93,41 @@ input.dc-band-hint::placeholder {
   opacity: 1;
 }
 
+/* Shared ledger-table select (Campaigns Digital/Activations, Cards By Batch).
+   Sized to its content (never width:100%), native arrow removed, custom caret at
+   right 11px with 34px right padding so the selected text is never clipped and
+   the caret never touches the edge; brand-blue border on focus. */
+select.ledger-select {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text);
+  background: #fff
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%237b7d84' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
+    no-repeat right 11px center;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 34px 6px 12px;
+  cursor: pointer;
+  outline: none;
+}
+select.ledger-select:focus {
+  border-color: var(--primary);
+}
+
+/* One subtle hover background for editable ledger rows — no layout change. */
+tr.ledger-row:hover {
+  background: #faf9f6;
+}
+
+/* Inline ledger text input: the dashed underline turns brand-blue on focus. */
+input.ledger-textinput:focus {
+  border-bottom-color: var(--primary);
+}
+
 /* Print / "Save as PDF" (Dashboard export): drop the chrome that shouldn't be
    captured (top nav, the Download button) and force background colours to
    render so charts and tinted cells survive the export. */

@@ -3482,31 +3482,22 @@ function CardsBatchesView({ batches, countryUsers, updateRoot }) {
     footer = [footerRow(`${filter} total`, filtered, isNum(countryUsers[filter]) ? countryUsers[filter] : null)];
   }
 
-  // Sticky header so the column labels stay visible while scrolling a long list.
+  // Sticky header (shared ledger style) so the column labels stay visible while
+  // scrolling a long list.
   const head = (label, align = 'right') => (
-    <th
-      style={{
-        ...thBase,
-        textAlign: align,
-        padding: align === 'left' ? '12px 14px' : '12px 8px',
-        position: 'sticky',
-        top: 0,
-        zIndex: 2,
-        background: C.gray100,
-      }}
-    >
+    <th style={{ ...LEDGER_TH_BASE, textAlign: align, position: 'sticky', top: 0, zIndex: 2 }}>
       {label}
     </th>
   );
   const mCell = (b, key, unit) => (
-    <td style={{ textAlign: 'right', padding: '4px 6px' }}>
-      <Cell value={isNum(b[key]) ? b[key] : null} unit={unit} onCommit={(v) => updateBatch(b.id, { [key]: v })} />
+    <td style={LEDGER_TD_NUM}>
+      <Cell value={isNum(b[key]) ? b[key] : null} unit={unit} onCommit={(v) => updateBatch(b.id, { [key]: v })} inputStyle={LEDGER_INPUT} />
     </td>
   );
   // Computed batch cells. Discounts & Fees and CAC are cost metrics: a negative
   // is GOOD (money recovered) and reads green; otherwise negative = red.
   const cCell = (val, unit, negGood) => (
-    <td style={{ textAlign: 'right', fontSize: 13, padding: '8px 8px', color: isNum(val) && val < 0 ? (negGood ? SUCCESS : DANGER) : C.text }}>
+    <td style={{ ...LEDGER_TD_NUM, fontSize: 13, color: isNum(val) && val < 0 ? (negGood ? SUCCESS : DANGER) : C.text }}>
       {val == null ? DASH : fmtByUnit(val, unit)}
     </td>
   );
@@ -3515,7 +3506,7 @@ function CardsBatchesView({ batches, countryUsers, updateRoot }) {
   const FOOTER_BG = CALC_LABEL_BG;
   const fStick = { position: 'sticky', bottom: 0, zIndex: 1, background: FOOTER_BG };
   const fCell = (val, unit, negGood) => (
-    <td style={{ ...fStick, textAlign: 'right', fontSize: 13, fontWeight: 700, padding: '10px 8px', color: isNum(val) && val < 0 ? (negGood ? SUCCESS : DANGER) : undefined }}>
+    <td style={{ ...fStick, ...LEDGER_TD_NUM, fontSize: 13, fontWeight: 700, color: isNum(val) && val < 0 ? (negGood ? SUCCESS : DANGER) : undefined }}>
       {val == null ? DASH : fmtByUnit(val, unit)}
     </td>
   );
@@ -3559,7 +3550,7 @@ function CardsBatchesView({ batches, countryUsers, updateRoot }) {
       </div>
 
       <div style={{ overflow: 'auto', maxHeight: 520, border: `1px solid ${CARD_BORDER}`, borderRadius: 16 }}>
-        <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 1040, fontVariantNumeric: 'tabular-nums' }}>
+        <table style={{ borderCollapse: 'collapse', width: '100%', tableLayout: 'auto', fontVariantNumeric: 'tabular-nums' }}>
           <thead>
             <tr>
               {head('Country', 'left')}
@@ -3573,7 +3564,7 @@ function CardsBatchesView({ batches, countryUsers, updateRoot }) {
               {head('CAC')}
               {head('Revenue')}
               {editable && (
-                <th style={{ ...thBase, width: 34, padding: '12px 6px', position: 'sticky', top: 0, zIndex: 2, background: C.gray100 }} />
+                <th style={{ ...LEDGER_TH_BASE, textAlign: 'right', width: 34, position: 'sticky', top: 0, zIndex: 2 }} />
               )}
             </tr>
           </thead>
@@ -3590,40 +3581,30 @@ function CardsBatchesView({ batches, countryUsers, updateRoot }) {
                 return (
                   <tr
                     key={b.id}
-                    style={{ borderTop: `1px solid ${C.gray200}` }}
+                    className="ledger-row"
+                    style={{ borderTop: `1px solid ${LEDGER_DIVIDER}` }}
                     onMouseEnter={editable ? () => setHoveredId(b.id) : undefined}
                     onMouseLeave={editable ? () => setHoveredId(null) : undefined}
                   >
-                    <td style={{ textAlign: 'left', padding: '4px 14px', whiteSpace: 'nowrap' }}>
-                      {showEdit ? (
-                        // Edit affordance revealed on hover (Owners/Masters only).
-                        <select
-                          value={b.country}
-                          onChange={(e) => changeCountry(b.id, e.target.value)}
-                          style={{
-                            fontFamily: 'inherit',
-                            fontSize: 13,
-                            color: C.text,
-                            background: '#fff',
-                            border: `1px solid ${C.border}`,
-                            borderRadius: 6,
-                            padding: '3px 6px',
-                            outline: 'none',
-                            cursor: 'pointer',
-                          }}
-                        >
-                          {CARD_COUNTRIES.map((c) => (
-                            <option key={c} value={c}>
-                              {c}
-                            </option>
-                          ))}
-                        </select>
-                      ) : (
-                        <span style={{ fontSize: 13 }}>
-                          <span style={{ marginRight: 7 }}>{CARD_COUNTRY_FLAG[b.country]}</span>
-                          {b.country}
-                        </span>
-                      )}
+                    <td style={LEDGER_TD_TEXT}>
+                      {/* Reserve one fixed slot (118×34) for BOTH the display and
+                          the hover-revealed <select> so revealing the control
+                          never shifts the columns downstream. */}
+                      <div style={{ minWidth: 118, height: 34, display: 'flex', alignItems: 'center' }}>
+                        {showEdit ? (
+                          <LedgerSelect
+                            value={b.country}
+                            options={CARD_COUNTRIES}
+                            onChange={(v) => changeCountry(b.id, v)}
+                            style={{ width: '100%', height: 34 }}
+                          />
+                        ) : (
+                          <span style={{ fontSize: 13 }}>
+                            <span style={{ marginRight: 7 }}>{CARD_COUNTRY_FLAG[b.country]}</span>
+                            {b.country}
+                          </span>
+                        )}
+                      </div>
                     </td>
                     {mCell(b, 'batchNo', 'count')}
                     {mCell(b, 'cards', 'count')}
@@ -3635,17 +3616,8 @@ function CardsBatchesView({ batches, countryUsers, updateRoot }) {
                     {cCell(batchCac(b), 'ratio', true)}
                     {mCell(b, 'revenue', 'usdt')}
                     {editable && (
-                      <td style={{ textAlign: 'center', padding: '4px 6px' }}>
-                        {showEdit && (
-                          <button
-                            type="button"
-                            onClick={() => removeBatch(b.id)}
-                            title="Remove batch"
-                            style={{ border: 'none', background: 'transparent', color: C.gray400, cursor: 'pointer', fontSize: 16, lineHeight: 1, padding: 2 }}
-                          >
-                            ×
-                          </button>
-                        )}
+                      <td style={{ textAlign: 'center', padding: '11px 8px' }}>
+                        {showEdit && <RemoveBtn onClick={() => removeBatch(b.id)} title="Remove batch" />}
                       </td>
                     )}
                   </tr>
@@ -3657,7 +3629,7 @@ function CardsBatchesView({ batches, countryUsers, updateRoot }) {
             <tfoot>
               {footer.map((f) => (
                 <tr key={f.label} style={{ borderTop: `1px solid ${C.border}` }}>
-                  <td style={{ ...fStick, textAlign: 'left', fontSize: 13, fontWeight: 700, padding: '10px 14px', whiteSpace: 'nowrap' }}>{f.label}</td>
+                  <td style={{ ...fStick, ...LEDGER_TD_TEXT, fontSize: 13, fontWeight: 700 }}>{f.label}</td>
                   <td style={fStick} />
                   {fCell(f.cards, 'count')}
                   {fCell(f.sent, 'usdt')}
@@ -3840,7 +3812,6 @@ const ENGAGEMENT_TYPES = ['Activation', 'Event'];
 const CAMPAIGN_STATUS = ['Completed', 'Active', 'Paused'];
 const ACTIVATION_RESULTS = ['Success', 'Failure'];
 
-const PILL_BASE = { padding: '4px 11px', borderRadius: 20, fontSize: 11, fontWeight: 700 };
 const CAMPAIGN_STATUS_STYLE = {
   Completed: { background: 'rgba(0,17,168,0.10)', color: C.primary },
   Active: { background: 'rgba(31,138,77,0.12)', color: '#1f8a4d' },
@@ -3859,54 +3830,27 @@ function newSeqId(existing, prefix) {
   return `${prefix}_${n}`;
 }
 
-// A status / result chip: a coloured <select> for editors, a static pill for
-// members. Shared by both campaign ledgers.
-function PillSelect({ value, options, styleMap, onChange }) {
+// The one shared ledger dropdown (Channel, Engagement, Status, Result, and the
+// By-Batch Country control). Editors get the bordered `.ledger-select` with the
+// custom caret and 34px right padding (so the text never clips and the caret
+// never touches the edge); members see static text. A `styleMap` (Status /
+// Result) tints the selected value; Channel / Engagement pass none.
+function LedgerSelect({ value, options, onChange, styleMap, className = 'ledger-select', style }) {
   const editable = useContext(EditableContext);
   const v = value || options[0];
-  const st = styleMap[v] || {};
-  if (!editable) return <span style={{ ...PILL_BASE, ...st }}>{v}</span>;
-  return (
-    <select
-      value={v}
-      onChange={(e) => onChange(e.target.value)}
-      style={{ ...PILL_BASE, ...st, border: 'none', fontFamily: 'inherit', cursor: 'pointer', outline: 'none' }}
-    >
-      {options.map((o) => (
-        <option key={o} value={o}>
-          {o}
-        </option>
-      ))}
-    </select>
-  );
-}
-
-// A plain enum <select> for editors (Channel, Engagement Type); muted text for
-// members. Subtle dashed underline matches the free-text TextCell.
-function EnumCell({ value, options, onChange, placeholder = 'Select' }) {
-  const editable = useContext(EditableContext);
+  const color = styleMap ? (styleMap[v] || {}).color : undefined;
   if (!editable) {
-    return <span style={{ fontSize: 13, color: value ? C.text : C.gray400 }}>{value || DASH}</span>;
+    return <span style={{ fontSize: 13, fontWeight: color ? 700 : 400, color: color || C.text }}>{v}</span>;
   }
   return (
     <select
-      value={value || ''}
+      className={className}
+      value={v}
       onChange={(e) => onChange(e.target.value)}
-      style={{
-        fontFamily: 'inherit',
-        fontSize: 13,
-        color: value ? C.text : C.gray400,
-        background: 'transparent',
-        border: 'none',
-        borderBottom: `1px dashed ${C.gray300}`,
-        padding: '5px 2px',
-        outline: 'none',
-        cursor: 'pointer',
-      }}
+      style={{ ...(color ? { color, fontWeight: 700 } : null), ...style }}
     >
-      {!value && <option value="">{placeholder}</option>}
       {options.map((o) => (
-        <option key={o} value={o}>
+        <option key={o} value={o} style={{ color: C.text, fontWeight: 500 }}>
           {o}
         </option>
       ))}
@@ -3987,6 +3931,7 @@ function TextCell({ value, placeholder, onCommit, bold }) {
       onKeyDown={(e) => {
         if (e.key === 'Enter') e.currentTarget.blur();
       }}
+      className="ledger-textinput"
       style={{
         width: '100%',
         fontFamily: 'inherit',
@@ -4039,11 +3984,55 @@ function AddRowBar({ label, onClick }) {
   );
 }
 
+// Shared ledger design language (Campaigns Digital/Activations, Cards By Batch):
+// one header style, one cell rhythm, one totals treatment. Even 13px horizontal
+// padding IS the gutter; that plus white-space:nowrap + table-layout:auto lets
+// each table size to content and fit its card in one view.
+const LEDGER_DIVIDER = '#f2eee6'; // 1px row divider
+const LEDGER_TOTAL_BG = 'rgba(0,17,168,0.045)'; // subtle brand-blue totals tint
+const LEDGER_TOTAL_BORDER = '#dfe3ed';
+const LEDGER_TH_BASE = {
+  fontSize: 10,
+  fontWeight: 600,
+  letterSpacing: '0.06em',
+  textTransform: 'uppercase',
+  color: C.muted,
+  whiteSpace: 'nowrap',
+  padding: '13px 13px',
+  borderBottom: `1px solid ${C.gray300}`,
+  background: '#fff',
+};
 const ledgerHead = (label, align = 'right') => (
-  <th style={{ ...thBase, textAlign: align, padding: align === 'left' ? '12px 14px' : '12px 8px', background: C.gray100 }}>
-    {label}
-  </th>
+  <th style={{ ...LEDGER_TH_BASE, textAlign: align }}>{label}</th>
 );
+// Even 13px gutter on every cell; the td owns the padding so inline inputs sit
+// flush (their own padding zeroed). Text columns left, numeric columns right.
+const LEDGER_TD_TEXT = { textAlign: 'left', padding: '11px 13px', whiteSpace: 'nowrap' };
+const LEDGER_TD_NUM = { textAlign: 'right', padding: '11px 13px', whiteSpace: 'nowrap' };
+const LEDGER_INPUT = { padding: 0, fontSize: 13 };
+
+// Editable numeric cell (Cell handles editor input vs. member read-only text).
+function LedgerNumCell({ row, field, unit, onCommit }) {
+  return (
+    <td style={LEDGER_TD_NUM}>
+      <Cell value={isNum(row[field]) ? row[field] : null} unit={unit} onCommit={onCommit} inputStyle={LEDGER_INPUT} />
+    </td>
+  );
+}
+// Computed (read-only) numeric cell. `negGood` flips a negative to green (a
+// cost recovered) instead of red — used by By Batch's Discounts & CAC.
+function LedgerCalcCell({ value, unit, negGood }) {
+  const color = value == null ? C.gray400 : value < 0 ? (negGood ? SUCCESS : DANGER) : C.text;
+  return <td style={{ ...LEDGER_TD_NUM, fontSize: 13, color }}>{value == null ? DASH : fmtByUnit(value, unit)}</td>;
+}
+// A totals-row cell in the SAME columns as the body: pass `label` for the
+// left-aligned "Total"/"All countries" cell, else a right-aligned numeric total.
+function LedgerTotalCell({ value, unit, negGood, label, align = 'right' }) {
+  const base = { padding: '11px 13px', whiteSpace: 'nowrap', fontSize: 13, fontWeight: 700, textAlign: align };
+  if (label !== undefined) return <td style={base}>{label}</td>;
+  const color = value == null ? C.gray400 : value < 0 ? (negGood ? SUCCESS : DANGER) : C.text;
+  return <td style={{ ...base, textAlign: 'right', color }}>{value == null ? DASH : fmtByUnit(value, unit)}</td>;
+}
 
 function CampaignsTab({ campaignsDigital, campaignsActivations, updateRoot, activeYear }) {
   const [sub, setSub] = useState('Digital');
@@ -4089,21 +4078,6 @@ function CampaignsDigitalView({ rows, updateRoot }) {
   const totUsers = ledgerSum(rows, 'users');
   const blendedCpi = safeDiv(totSpend, totInstalls);
 
-  const numTd = (r, key, unit) => (
-    <td style={{ textAlign: 'right', padding: '4px 6px' }}>
-      <Cell value={isNum(r[key]) ? r[key] : null} unit={unit} onCommit={(v) => updateRow(r.id, { [key]: v })} />
-    </td>
-  );
-  const calcTd = (val, unit) => (
-    <td style={{ textAlign: 'right', fontSize: 13, padding: '8px 8px', color: val == null ? C.gray400 : C.text }}>
-      {val == null ? DASH : fmtByUnit(val, unit)}
-    </td>
-  );
-  const fCell = (val, unit) => (
-    <td style={{ textAlign: 'right', fontSize: 13, fontWeight: 700, padding: '10px 8px', color: val == null ? C.gray400 : C.text }}>
-      {val == null ? DASH : fmtByUnit(val, unit)}
-    </td>
-  );
   const colSpanAll = editable ? 9 : 8;
 
   return (
@@ -4118,46 +4092,46 @@ function CampaignsDigitalView({ rows, updateRoot }) {
       />
       <Card style={{ padding: 0, overflow: 'hidden' }}>
         <div style={{ overflowX: 'auto' }}>
-          <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 920 }}>
+          <table style={{ borderCollapse: 'collapse', width: '100%', tableLayout: 'auto', fontVariantNumeric: 'tabular-nums' }}>
             <thead>
               <tr>
-                {ledgerHead('Channel', 'left')}
                 {ledgerHead('Period', 'left')}
+                {ledgerHead('Channel', 'left')}
                 {ledgerHead('Clicks')}
                 {ledgerHead('Installs')}
                 {ledgerHead('CPI')}
                 {ledgerHead('Spend')}
                 {ledgerHead('Users')}
                 {ledgerHead('Status', 'left')}
-                {editable && <th style={{ ...thBase, width: 36, padding: '12px 8px', background: C.gray100 }} />}
+                {editable && <th style={{ ...LEDGER_TH_BASE, textAlign: 'right', width: 34 }} />}
               </tr>
             </thead>
             <tbody>
               {rows.length === 0 ? (
-                <tr style={{ borderTop: `1px solid ${C.gray200}` }}>
+                <tr style={{ borderTop: `1px solid ${LEDGER_DIVIDER}` }}>
                   <td colSpan={colSpanAll} style={{ padding: '20px 16px', color: C.muted, fontSize: 13, textAlign: 'center' }}>
                     No digital campaigns yet.{editable ? ' Add a row to get started.' : ''}
                   </td>
                 </tr>
               ) : (
                 rows.map((r) => (
-                  <tr key={r.id} style={{ borderTop: `1px solid ${C.gray200}` }}>
-                    <td style={{ textAlign: 'left', padding: '6px 14px', minWidth: 120 }}>
-                      <EnumCell value={r.channel} options={DIGITAL_CHANNELS} onChange={(v) => updateRow(r.id, { channel: v })} placeholder="Channel" />
-                    </td>
-                    <td style={{ textAlign: 'left', padding: '6px 12px', minWidth: 120 }}>
+                  <tr key={r.id} className="ledger-row" style={{ borderTop: `1px solid ${LEDGER_DIVIDER}` }}>
+                    <td style={LEDGER_TD_TEXT}>
                       <MonthCell value={r.period} onChange={(v) => updateRow(r.id, { period: v })} />
                     </td>
-                    {numTd(r, 'clicks', 'count')}
-                    {numTd(r, 'installs', 'count')}
-                    {calcTd(safeDiv(r.spend, r.installs), 'ratio')}
-                    {numTd(r, 'spend', 'usd')}
-                    {numTd(r, 'users', 'count')}
-                    <td style={{ textAlign: 'left', padding: '6px 12px' }}>
-                      <PillSelect value={r.status} options={CAMPAIGN_STATUS} styleMap={CAMPAIGN_STATUS_STYLE} onChange={(v) => updateRow(r.id, { status: v })} />
+                    <td style={LEDGER_TD_TEXT}>
+                      <LedgerSelect value={r.channel} options={DIGITAL_CHANNELS} onChange={(v) => updateRow(r.id, { channel: v })} />
+                    </td>
+                    <LedgerNumCell row={r} field="clicks" unit="count" onCommit={(v) => updateRow(r.id, { clicks: v })} />
+                    <LedgerNumCell row={r} field="installs" unit="count" onCommit={(v) => updateRow(r.id, { installs: v })} />
+                    <LedgerCalcCell value={safeDiv(r.spend, r.installs)} unit="ratio" />
+                    <LedgerNumCell row={r} field="spend" unit="usd" onCommit={(v) => updateRow(r.id, { spend: v })} />
+                    <LedgerNumCell row={r} field="users" unit="count" onCommit={(v) => updateRow(r.id, { users: v })} />
+                    <td style={LEDGER_TD_TEXT}>
+                      <LedgerSelect value={r.status} options={CAMPAIGN_STATUS} styleMap={CAMPAIGN_STATUS_STYLE} onChange={(v) => updateRow(r.id, { status: v })} />
                     </td>
                     {editable && (
-                      <td style={{ textAlign: 'center', padding: '6px 8px' }}>
+                      <td style={{ textAlign: 'center', padding: '11px 8px' }}>
                         <RemoveBtn onClick={() => removeRow(r.id)} title="Remove row" />
                       </td>
                     )}
@@ -4165,14 +4139,14 @@ function CampaignsDigitalView({ rows, updateRoot }) {
                 ))
               )}
               {rows.length > 0 && (
-                <tr style={{ background: CALC_LABEL_BG, borderTop: `1px solid ${C.border}` }}>
-                  <td style={{ textAlign: 'left', fontWeight: 700, fontSize: 13, padding: '10px 14px' }}>Total</td>
+                <tr style={{ background: LEDGER_TOTAL_BG, borderTop: `1px solid ${LEDGER_TOTAL_BORDER}` }}>
+                  <LedgerTotalCell label="Total" align="left" />
                   <td />
-                  {fCell(totClicks, 'count')}
-                  {fCell(totInstalls, 'count')}
-                  {fCell(blendedCpi, 'ratio')}
-                  {fCell(totSpend, 'usd')}
-                  {fCell(totUsers, 'count')}
+                  <LedgerTotalCell value={totClicks} unit="count" />
+                  <LedgerTotalCell value={totInstalls} unit="count" />
+                  <LedgerTotalCell value={blendedCpi} unit="ratio" />
+                  <LedgerTotalCell value={totSpend} unit="usd" />
+                  <LedgerTotalCell value={totUsers} unit="count" />
                   <td />
                   {editable && <td />}
                 </tr>
@@ -4214,21 +4188,6 @@ function CampaignsActivationsView({ rows, updateRoot }) {
   const totCost = ledgerSum(rows, 'totalCost');
   const blendedCpu = safeDiv(totCost, totUsers);
 
-  const numTd = (r, key, unit) => (
-    <td style={{ textAlign: 'right', padding: '4px 6px' }}>
-      <Cell value={isNum(r[key]) ? r[key] : null} unit={unit} onCommit={(v) => updateRow(r.id, { [key]: v })} />
-    </td>
-  );
-  const calcTd = (val, unit) => (
-    <td style={{ textAlign: 'right', fontSize: 13, padding: '8px 8px', color: val == null ? C.gray400 : C.text }}>
-      {val == null ? DASH : fmtByUnit(val, unit)}
-    </td>
-  );
-  const fCell = (val, unit) => (
-    <td style={{ textAlign: 'right', fontSize: 13, fontWeight: 700, padding: '10px 8px', color: val == null ? C.gray400 : C.text }}>
-      {val == null ? DASH : fmtByUnit(val, unit)}
-    </td>
-  );
   const colSpanAll = editable ? 11 : 10;
 
   return (
@@ -4242,54 +4201,54 @@ function CampaignsActivationsView({ rows, updateRoot }) {
       />
       <Card style={{ padding: 0, overflow: 'hidden' }}>
         <div style={{ overflowX: 'auto' }}>
-          <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 1080 }}>
+          <table style={{ borderCollapse: 'collapse', width: '100%', tableLayout: 'auto', fontVariantNumeric: 'tabular-nums' }}>
             <thead>
               <tr>
                 {ledgerHead('Country', 'left')}
-                {ledgerHead('Community Partner', 'left')}
-                {ledgerHead('Engagement Type', 'left')}
+                {ledgerHead('Partner', 'left')}
+                {ledgerHead('Engagement', 'left')}
                 {ledgerHead('Target')}
-                {ledgerHead('Users Acquired')}
-                {ledgerHead('Success Rate')}
+                {ledgerHead('Users Acq.')}
+                {ledgerHead('Success %')}
                 {ledgerHead('Total Cost')}
                 {ledgerHead('Cost / User')}
                 {ledgerHead('Status', 'left')}
                 {ledgerHead('Result', 'left')}
-                {editable && <th style={{ ...thBase, width: 36, padding: '12px 8px', background: C.gray100 }} />}
+                {editable && <th style={{ ...LEDGER_TH_BASE, textAlign: 'right', width: 34 }} />}
               </tr>
             </thead>
             <tbody>
               {rows.length === 0 ? (
-                <tr style={{ borderTop: `1px solid ${C.gray200}` }}>
+                <tr style={{ borderTop: `1px solid ${LEDGER_DIVIDER}` }}>
                   <td colSpan={colSpanAll} style={{ padding: '20px 16px', color: C.muted, fontSize: 13, textAlign: 'center' }}>
                     No activations yet.{editable ? ' Add a row to get started.' : ''}
                   </td>
                 </tr>
               ) : (
                 rows.map((r) => (
-                  <tr key={r.id} style={{ borderTop: `1px solid ${C.gray200}` }}>
-                    <td style={{ textAlign: 'left', padding: '6px 14px', minWidth: 110 }}>
+                  <tr key={r.id} className="ledger-row" style={{ borderTop: `1px solid ${LEDGER_DIVIDER}` }}>
+                    <td style={LEDGER_TD_TEXT}>
                       <TextCell value={r.country} placeholder="Country" onCommit={(v) => updateRow(r.id, { country: v })} />
                     </td>
-                    <td style={{ textAlign: 'left', padding: '6px 12px', minWidth: 140 }}>
+                    <td style={LEDGER_TD_TEXT}>
                       <TextCell value={r.partner} placeholder="Partner" onCommit={(v) => updateRow(r.id, { partner: v })} />
                     </td>
-                    <td style={{ textAlign: 'left', padding: '6px 12px', minWidth: 120 }}>
-                      <EnumCell value={r.engagementType} options={ENGAGEMENT_TYPES} onChange={(v) => updateRow(r.id, { engagementType: v })} placeholder="Type" />
+                    <td style={LEDGER_TD_TEXT}>
+                      <LedgerSelect value={r.engagementType} options={ENGAGEMENT_TYPES} onChange={(v) => updateRow(r.id, { engagementType: v })} />
                     </td>
-                    {numTd(r, 'target', 'count')}
-                    {numTd(r, 'usersAcquired', 'count')}
-                    {calcTd(pct(r.usersAcquired, r.target), 'percent')}
-                    {numTd(r, 'totalCost', 'usd')}
-                    {calcTd(safeDiv(r.totalCost, r.usersAcquired), 'ratio')}
-                    <td style={{ textAlign: 'left', padding: '6px 12px' }}>
-                      <PillSelect value={r.status} options={CAMPAIGN_STATUS} styleMap={CAMPAIGN_STATUS_STYLE} onChange={(v) => updateRow(r.id, { status: v })} />
+                    <LedgerNumCell row={r} field="target" unit="count" onCommit={(v) => updateRow(r.id, { target: v })} />
+                    <LedgerNumCell row={r} field="usersAcquired" unit="count" onCommit={(v) => updateRow(r.id, { usersAcquired: v })} />
+                    <LedgerCalcCell value={pct(r.usersAcquired, r.target)} unit="percent" />
+                    <LedgerNumCell row={r} field="totalCost" unit="usd" onCommit={(v) => updateRow(r.id, { totalCost: v })} />
+                    <LedgerCalcCell value={safeDiv(r.totalCost, r.usersAcquired)} unit="ratio" />
+                    <td style={LEDGER_TD_TEXT}>
+                      <LedgerSelect value={r.status} options={CAMPAIGN_STATUS} styleMap={CAMPAIGN_STATUS_STYLE} onChange={(v) => updateRow(r.id, { status: v })} />
                     </td>
-                    <td style={{ textAlign: 'left', padding: '6px 12px' }}>
-                      <PillSelect value={r.result} options={ACTIVATION_RESULTS} styleMap={RESULT_STYLE} onChange={(v) => updateRow(r.id, { result: v })} />
+                    <td style={LEDGER_TD_TEXT}>
+                      <LedgerSelect value={r.result} options={ACTIVATION_RESULTS} styleMap={RESULT_STYLE} onChange={(v) => updateRow(r.id, { result: v })} />
                     </td>
                     {editable && (
-                      <td style={{ textAlign: 'center', padding: '6px 8px' }}>
+                      <td style={{ textAlign: 'center', padding: '11px 8px' }}>
                         <RemoveBtn onClick={() => removeRow(r.id)} title="Remove row" />
                       </td>
                     )}
@@ -4297,15 +4256,15 @@ function CampaignsActivationsView({ rows, updateRoot }) {
                 ))
               )}
               {rows.length > 0 && (
-                <tr style={{ background: CALC_LABEL_BG, borderTop: `1px solid ${C.border}` }}>
-                  <td style={{ textAlign: 'left', fontWeight: 700, fontSize: 13, padding: '10px 14px' }}>Total</td>
+                <tr style={{ background: LEDGER_TOTAL_BG, borderTop: `1px solid ${LEDGER_TOTAL_BORDER}` }}>
+                  <LedgerTotalCell label="Total" align="left" />
                   <td />
                   <td />
-                  {fCell(totTarget, 'count')}
-                  {fCell(totUsers, 'count')}
+                  <LedgerTotalCell value={totTarget} unit="count" />
+                  <LedgerTotalCell value={totUsers} unit="count" />
                   <td />
-                  {fCell(totCost, 'usd')}
-                  {fCell(blendedCpu, 'ratio')}
+                  <LedgerTotalCell value={totCost} unit="usd" />
+                  <LedgerTotalCell value={blendedCpu} unit="ratio" />
                   <td />
                   <td />
                   {editable && <td />}
