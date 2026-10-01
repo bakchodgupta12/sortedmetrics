@@ -17,6 +17,13 @@ const {
   sessionCookie,
   MAX_AGE_SECONDS,
 } = require('../lib/auth');
+const {
+  getClientIp,
+  identifiersFor,
+  isLocked,
+  registerFailure,
+  clearAttempts,
+} = require('../lib/rateLimit');
 
 module.exports = async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -33,6 +40,17 @@ module.exports = async function handler(req, res) {
     const username = String(body.username || '').trim().toLowerCase();
     const password = String(body.password || '');
 
+    const ip = getClientIp(req);
+    const identifiers = identifiersFor(username, ip);
+
+    // Rate limit by BOTH username and IP, before touching the password.
+    const lock = await isLocked(identifiers);
+    if (lock.locked) {
+      return res
+        .status(429)
+        .json({ ok: false, error: 'Too many attempts. Please try again later.' });
+    }
+
     const supabase = getSupabaseAdmin();
 
     // Always run the lookup (even for an empty username) so timing is uniform.
@@ -43,7 +61,10 @@ module.exports = async function handler(req, res) {
       .maybeSingle();
 
     // Always performs hashing work, whether or not the row exists.
-    if (!passwordMatches(row, password)) return invalid();
+    if (!passwordMatches(row, password)) {
+      await registerFailure(identifiers);
+      return invalid();
+    }
 
     const token = generateToken();
     const now = new Date();
@@ -57,6 +78,9 @@ module.exports = async function handler(req, res) {
       expires_at: expiresAt.toISOString(),
     });
     if (insertError) throw insertError;
+
+    // Successful login clears the failed-attempt counters.
+    await clearAttempts(identifiers);
 
     res.setHeader('Set-Cookie', sessionCookie(token));
     return res.status(200).json({
