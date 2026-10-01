@@ -94,3 +94,73 @@ export async function apiUpdateDisplayName(displayName) {
 export function canEditRole(role) {
   return role === 'admin' || role === 'editor';
 }
+
+// POST /api/change-password  { currentPassword, newPassword }
+export async function apiChangePassword(currentPassword, newPassword) {
+  const { ok, body } = await jsonFetch('/api/change-password', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ currentPassword, newPassword }),
+  });
+  if (!ok || !body || !body.ok) {
+    throw new Error((body && body.error) || 'Could not change password');
+  }
+  return true;
+}
+
+// ── Admin account management (admin role only; server enforces) ───────────────
+export async function apiAdminListUsers() {
+  const { ok, body } = await jsonFetch('/api/admin/users');
+  if (!ok || !body || !body.ok) {
+    throw new Error((body && body.error) || 'Could not list users');
+  }
+  return body.users;
+}
+
+export async function apiAdminCreateUser({ username, display_name, password, role }) {
+  const { ok, body } = await jsonFetch('/api/admin/users', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, display_name, password, role }),
+  });
+  if (!ok || !body || !body.ok) {
+    throw new Error((body && body.error) || 'Could not create account');
+  }
+  return body.user;
+}
+
+export async function apiAdminSetRole(username, role) {
+  const { ok, body } = await jsonFetch('/api/admin/users/role', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, role }),
+  });
+  if (!ok || !body || !body.ok) {
+    throw new Error((body && body.error) || 'Could not change role');
+  }
+  return true;
+}
+
+export async function apiAdminResetPassword(username, newPassword) {
+  const { ok, body } = await jsonFetch('/api/admin/users/reset-password', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, newPassword }),
+  });
+  if (!ok || !body || !body.ok) {
+    throw new Error((body && body.error) || 'Could not reset password');
+  }
+  return true;
+}
+
+export async function apiAdminDeleteUser(username) {
+  const { ok, body } = await jsonFetch('/api/admin/users/delete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username }),
+  });
+  if (!ok || !body || !body.ok) {
+    throw new Error((body && body.error) || 'Could not delete account');
+  }
+  return true;
+}

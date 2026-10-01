@@ -18,22 +18,14 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
+import { MONTHS, emptyYear, listYears, normaliseData } from './dataModel';
 import {
-  MONTHS,
-  SECURITY_QUESTIONS,
-  changePassword,
-  createUser,
-  deleteAccount,
-  emptyYear,
-  getUser,
-  isConfigured,
-  listYears,
-  normaliseData,
-  resetPassword,
-  verifySecurityAnswer,
-  verifyPassword,
-} from './supabase';
-import {
+  apiAdminCreateUser,
+  apiAdminDeleteUser,
+  apiAdminListUsers,
+  apiAdminResetPassword,
+  apiAdminSetRole,
+  apiChangePassword,
   apiGetData,
   apiGetSession,
   apiLogin,
@@ -188,47 +180,19 @@ function Field({ label, children }) {
 }
 
 function AuthScreen({ onLogin }) {
-  // step: 'username' | 'login' | 'register' | 'forgot'
+  // step: 'username' | 'login'  (admin-managed: no self-service register/reset)
   const [step, setStep] = useState('username');
   const [username, setUsername] = useState('');
-  const [row, setRow] = useState(null); // existing user row, when known
+  const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
-  // form fields
-  const [password, setPassword] = useState('');
-  const [password2, setPassword2] = useState('');
-  const [displayName, setDisplayName] = useState('');
-  const [question, setQuestion] = useState(SECURITY_QUESTIONS[0]);
-  const [answer, setAnswer] = useState('');
-
-  const reset = () => {
-    setPassword('');
-    setPassword2('');
-    setDisplayName('');
-    setAnswer('');
-    setError('');
-  };
-
-  const submitUsername = async (e) => {
+  const submitUsername = (e) => {
     e.preventDefault();
     if (!username.trim()) return;
-    setBusy(true);
     setError('');
-    try {
-      const existing = await getUser(username);
-      reset();
-      if (existing) {
-        setRow(existing);
-        setStep('login');
-      } else {
-        setStep('register');
-      }
-    } catch (err) {
-      setError(err.message || 'Could not reach the server.');
-    } finally {
-      setBusy(false);
-    }
+    setPassword('');
+    setStep('login');
   };
 
   const submitLogin = async (e) => {
@@ -240,79 +204,19 @@ function AuthScreen({ onLogin }) {
       const user = await apiLogin(username, password);
       onLogin(user);
     } catch (err) {
-      setError(err.status === 401 ? 'Incorrect password.' : err.message || 'Login failed.');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const submitRegister = async (e) => {
-    e.preventDefault();
-    if (password.length < 6) {
-      setError('Password must be at least 6 characters.');
-      return;
-    }
-    if (password !== password2) {
-      setError('Passwords do not match.');
-      return;
-    }
-    if (!answer.trim()) {
-      setError('Please answer your security question.');
-      return;
-    }
-    setBusy(true);
-    setError('');
-    try {
-      // Account creation stays on the direct client for now (account-lifecycle,
-      // handled in a later stage); then establish a server session via /api/login.
-      await createUser({
-        username,
-        password,
-        securityQuestion: question,
-        securityAnswer: answer,
-        displayName: displayName.trim() || username.trim(),
-        initialYear: new Date().getFullYear(),
-      });
-      const user = await apiLogin(username, password);
-      onLogin(user);
-    } catch (err) {
-      setError(err.message || 'Could not create account.');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const submitForgot = async (e) => {
-    e.preventDefault();
-    if (password.length < 6) {
-      setError('Password must be at least 6 characters.');
-      return;
-    }
-    if (password !== password2) {
-      setError('Passwords do not match.');
-      return;
-    }
-    setBusy(true);
-    setError('');
-    try {
-      const ok = await verifySecurityAnswer(row, answer);
-      if (!ok) {
-        setError('That answer does not match.');
-        return;
-      }
-      await resetPassword(username, password);
-      const user = await apiLogin(username, password);
-      onLogin(user);
-    } catch (err) {
-      setError(err.message || 'Could not reset password.');
+      setError(
+        err.status === 401
+          ? 'Incorrect username or password.'
+          : err.message || 'Login failed.'
+      );
     } finally {
       setBusy(false);
     }
   };
 
   const back = () => {
-    reset();
-    setRow(null);
+    setPassword('');
+    setError('');
     setStep('username');
   };
 
@@ -346,13 +250,6 @@ function AuthScreen({ onLogin }) {
         </p>
 
         <Card accent={C.primary}>
-          {!isConfigured && (
-            <p style={{ color: C.red, fontSize: 13 }}>
-              Supabase is not configured. Add your keys to <code>.env</code> and
-              restart.
-            </p>
-          )}
-
           {step === 'username' && (
             <form onSubmit={submitUsername}>
               <Field label="Username">
@@ -365,7 +262,7 @@ function AuthScreen({ onLogin }) {
                 />
               </Field>
               <button style={authBtn(busy)} disabled={busy}>
-                {busy ? 'Checking…' : 'Continue'}
+                Continue
               </button>
             </form>
           )}
@@ -373,7 +270,7 @@ function AuthScreen({ onLogin }) {
           {step === 'login' && (
             <form onSubmit={submitLogin}>
               <p style={{ fontSize: 14, marginTop: 0 }}>
-                Welcome back, <strong>{row?.display_name || username}</strong>.
+                Signing in as <strong>{username}</strong>.
               </p>
               <Field label="Password">
                 <input
@@ -386,109 +283,6 @@ function AuthScreen({ onLogin }) {
               </Field>
               <button style={authBtn(busy)} disabled={busy}>
                 {busy ? 'Signing in…' : 'Sign in'}
-              </button>
-              <div style={{ marginTop: 12, textAlign: 'center' }}>
-                <button
-                  type="button"
-                  onClick={() => {
-                    reset();
-                    setStep('forgot');
-                  }}
-                  style={linkBtn}
-                >
-                  Forgot password?
-                </button>
-              </div>
-            </form>
-          )}
-
-          {step === 'register' && (
-            <form onSubmit={submitRegister}>
-              <p style={{ fontSize: 14, marginTop: 0 }}>
-                Setting up <strong>{username}</strong>. Choose a password and a
-                security question.
-              </p>
-              <Field label="Display name">
-                <input
-                  style={authInput}
-                  value={displayName}
-                  onChange={(e) => setDisplayName(e.target.value)}
-                  placeholder={username}
-                />
-              </Field>
-              <Field label="Password">
-                <input
-                  style={authInput}
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                />
-              </Field>
-              <Field label="Confirm password">
-                <input
-                  style={authInput}
-                  type="password"
-                  value={password2}
-                  onChange={(e) => setPassword2(e.target.value)}
-                />
-              </Field>
-              <Field label="Security question">
-                <select
-                  style={authInput}
-                  value={question}
-                  onChange={(e) => setQuestion(e.target.value)}
-                >
-                  {SECURITY_QUESTIONS.map((q) => (
-                    <option key={q} value={q}>
-                      {q}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-              <Field label="Answer">
-                <input
-                  style={authInput}
-                  value={answer}
-                  onChange={(e) => setAnswer(e.target.value)}
-                />
-              </Field>
-              <button style={authBtn(busy)} disabled={busy}>
-                {busy ? 'Creating…' : 'Create account'}
-              </button>
-            </form>
-          )}
-
-          {step === 'forgot' && (
-            <form onSubmit={submitForgot}>
-              <p style={{ fontSize: 14, marginTop: 0 }}>
-                Reset password for <strong>{username}</strong>.
-              </p>
-              <Field label={row?.security_question || 'Security question'}>
-                <input
-                  style={authInput}
-                  autoFocus
-                  value={answer}
-                  onChange={(e) => setAnswer(e.target.value)}
-                />
-              </Field>
-              <Field label="New password">
-                <input
-                  style={authInput}
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                />
-              </Field>
-              <Field label="Confirm new password">
-                <input
-                  style={authInput}
-                  type="password"
-                  value={password2}
-                  onChange={(e) => setPassword2(e.target.value)}
-                />
-              </Field>
-              <button style={authBtn(busy)} disabled={busy}>
-                {busy ? 'Resetting…' : 'Reset password'}
               </button>
             </form>
           )}
@@ -2317,6 +2111,242 @@ function TabContent({
 // ─────────────────────────────────────────────────────────────────────────────
 // Settings (shell-level: display name, password, year + account management)
 // ─────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// Admin-only: Team / Accounts management
+// ─────────────────────────────────────────────────────────────────────────────
+function TeamAdmin({ currentUsername }) {
+  const [users, setUsers] = useState(null);
+  const [err, setErr] = useState('');
+  const [msg, setMsg] = useState('');
+
+  const [nu, setNu] = useState('');
+  const [nd, setNd] = useState('');
+  const [np, setNp] = useState('');
+  const [nr, setNr] = useState('editor');
+  const [creating, setCreating] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      const list = await apiAdminListUsers();
+      setUsers(list);
+    } catch (e) {
+      setErr(e.message || 'Could not load users.');
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const flash = (m) => {
+    setMsg(m);
+    setErr('');
+  };
+
+  const onCreate = async (e) => {
+    e.preventDefault();
+    setErr('');
+    setMsg('');
+    if (!nu.trim()) {
+      setErr('Username is required.');
+      return;
+    }
+    if (np.length < 6) {
+      setErr('Password must be at least 6 characters.');
+      return;
+    }
+    setCreating(true);
+    try {
+      await apiAdminCreateUser({
+        username: nu.trim(),
+        display_name: nd.trim(),
+        password: np,
+        role: nr,
+      });
+      setNu('');
+      setNd('');
+      setNp('');
+      setNr('editor');
+      flash('Account created.');
+      await load();
+    } catch (e2) {
+      setErr(e2.message || 'Could not create account.');
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const onRole = async (username, role) => {
+    setErr('');
+    setMsg('');
+    try {
+      await apiAdminSetRole(username, role);
+      flash('Role updated.');
+    } catch (e) {
+      setErr(e.message || 'Could not change role.');
+    }
+    await load();
+  };
+
+  const onReset = async (username) => {
+    const pw = window.prompt(`New password for ${username} (at least 6 characters):`);
+    if (pw == null) return;
+    setErr('');
+    setMsg('');
+    try {
+      await apiAdminResetPassword(username, pw);
+      flash(`Password reset for ${username}.`);
+    } catch (e) {
+      setErr(e.message || 'Could not reset password.');
+    }
+  };
+
+  const onRemove = async (username) => {
+    if (!window.confirm(`Remove account "${username}"? This cannot be undone.`)) return;
+    setErr('');
+    setMsg('');
+    try {
+      await apiAdminDeleteUser(username);
+      flash(`Removed ${username}.`);
+      await load();
+    } catch (e) {
+      setErr(e.message || 'Could not remove account.');
+    }
+  };
+
+  const sectionLabel = {
+    fontSize: 10,
+    fontWeight: 500,
+    letterSpacing: '0.08em',
+    textTransform: 'uppercase',
+    color: C.muted,
+  };
+  const inp = { ...authInput, marginTop: 0 };
+  const btn = {
+    border: 'none',
+    background: C.primary,
+    color: '#fff',
+    borderRadius: 8,
+    padding: '8px 14px',
+    fontWeight: 600,
+    fontSize: 13,
+  };
+  const ghostBtn = {
+    border: `1px solid ${C.border}`,
+    background: '#fff',
+    color: C.text,
+    borderRadius: 7,
+    padding: '5px 10px',
+    fontSize: 12,
+    fontWeight: 600,
+    marginLeft: 6,
+  };
+  const th = {
+    ...thBase,
+    textAlign: 'left',
+    padding: '8px 6px',
+  };
+  const td = { padding: '8px 6px', fontSize: 13, verticalAlign: 'top' };
+
+  return (
+    <Card accent={C.primary}>
+      <div style={sectionLabel}>Team</div>
+      <h2 style={{ fontSize: 18, margin: '4px 0 12px' }}>Accounts</h2>
+
+      <form onSubmit={onCreate} style={{ display: 'grid', gap: 8, marginBottom: 16 }}>
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+            gap: 8,
+          }}
+        >
+          <input style={inp} placeholder="username" value={nu} onChange={(e) => setNu(e.target.value)} />
+          <input style={inp} placeholder="display name" value={nd} onChange={(e) => setNd(e.target.value)} />
+          <input
+            style={inp}
+            type="password"
+            placeholder="initial password"
+            value={np}
+            onChange={(e) => setNp(e.target.value)}
+          />
+          <select style={inp} value={nr} onChange={(e) => setNr(e.target.value)}>
+            <option value="admin">admin</option>
+            <option value="editor">editor</option>
+            <option value="viewer">viewer</option>
+          </select>
+        </div>
+        <div>
+          <button style={{ ...btn, opacity: creating ? 0.7 : 1 }} disabled={creating}>
+            {creating ? 'Creating…' : 'Create account'}
+          </button>
+        </div>
+      </form>
+
+      {users == null ? (
+        <p style={{ color: C.muted, fontSize: 13 }}>Loading…</p>
+      ) : (
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ borderCollapse: 'collapse', width: '100%' }}>
+            <thead>
+              <tr style={{ borderBottom: `1px solid ${C.border}` }}>
+                <th style={th}>User</th>
+                <th style={th}>Role</th>
+                <th style={{ ...th, textAlign: 'right' }}>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {users.map((u) => {
+                const isSelf = u.username === currentUsername;
+                return (
+                  <tr key={u.username} style={{ borderBottom: `1px solid ${C.bg}` }}>
+                    <td style={td}>
+                      <div style={{ fontWeight: 600 }}>{u.display_name || u.username}</div>
+                      <div style={{ fontSize: 12, color: C.muted }}>
+                        {u.username}
+                        {isSelf ? ' (you)' : ''}
+                      </div>
+                    </td>
+                    <td style={td}>
+                      <select
+                        value={u.role || ''}
+                        disabled={isSelf}
+                        onChange={(e) => onRole(u.username, e.target.value)}
+                        style={{ ...inp, width: 'auto', opacity: isSelf ? 0.6 : 1 }}
+                        title={isSelf ? "You can't change your own role" : undefined}
+                      >
+                        <option value="admin">admin</option>
+                        <option value="editor">editor</option>
+                        <option value="viewer">viewer</option>
+                      </select>
+                    </td>
+                    <td style={{ ...td, textAlign: 'right', whiteSpace: 'nowrap' }}>
+                      <button style={ghostBtn} onClick={() => onReset(u.username)}>
+                        Reset password
+                      </button>
+                      {!isSelf && (
+                        <button
+                          style={{ ...ghostBtn, color: C.red, borderColor: C.red }}
+                          onClick={() => onRemove(u.username)}
+                        >
+                          Remove
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {msg && <p style={{ color: C.green, fontSize: 13, marginBottom: 0 }}>{msg}</p>}
+      {err && <p style={{ color: C.red, fontSize: 13, marginBottom: 0 }}>{err}</p>}
+    </Card>
+  );
+}
+
 function SettingsTab({ user, setUser, canEdit, activeYear, years, onDeleteYear, onLogout }) {
   const [displayName, setDisplayName] = useState(user.display_name || '');
   const [msg, setMsg] = useState('');
@@ -2325,8 +2355,6 @@ function SettingsTab({ user, setUser, canEdit, activeYear, years, onDeleteYear, 
   const [newPw, setNewPw] = useState('');
   const [newPw2, setNewPw2] = useState('');
   const [pwMsg, setPwMsg] = useState('');
-
-  const [confirmDelete, setConfirmDelete] = useState('');
 
   const saveName = async () => {
     setMsg('');
@@ -2341,24 +2369,16 @@ function SettingsTab({ user, setUser, canEdit, activeYear, years, onDeleteYear, 
 
   const doChangePassword = async () => {
     setPwMsg('');
+    if (newPw.length < 6) {
+      setPwMsg('New password must be at least 6 characters.');
+      return;
+    }
+    if (newPw !== newPw2) {
+      setPwMsg('New passwords do not match.');
+      return;
+    }
     try {
-      // Account-lifecycle (direct client, to be migrated later): fetch the row
-      // to verify the current password, since `user` no longer carries hashes.
-      const row = await getUser(user.username);
-      const ok = row && (await verifyPassword(row, curPw));
-      if (!ok) {
-        setPwMsg('Current password is incorrect.');
-        return;
-      }
-      if (newPw.length < 6) {
-        setPwMsg('New password must be at least 6 characters.');
-        return;
-      }
-      if (newPw !== newPw2) {
-        setPwMsg('New passwords do not match.');
-        return;
-      }
-      await changePassword(user.username, newPw);
+      await apiChangePassword(curPw, newPw);
       setCurPw('');
       setNewPw('');
       setNewPw2('');
@@ -2375,16 +2395,6 @@ function SettingsTab({ user, setUser, canEdit, activeYear, years, onDeleteYear, 
     }
     if (window.confirm(`Delete all data for ${activeYear}? This cannot be undone.`)) {
       onDeleteYear(activeYear);
-    }
-  };
-
-  const doDeleteAccount = async () => {
-    if (confirmDelete !== 'DELETE') return;
-    try {
-      await deleteAccount(user.username);
-      onLogout();
-    } catch (e) {
-      window.alert(e.message || 'Could not delete account.');
     }
   };
 
@@ -2474,9 +2484,6 @@ function SettingsTab({ user, setUser, canEdit, activeYear, years, onDeleteYear, 
             {pwMsg}
           </p>
         )}
-        <div style={{ fontSize: 12, color: C.muted, marginTop: 12 }}>
-          Security question: <strong>{user.security_question}</strong>
-        </div>
       </Card>
 
       {canEdit && (
@@ -2496,33 +2503,7 @@ function SettingsTab({ user, setUser, canEdit, activeYear, years, onDeleteYear, 
         </Card>
       )}
 
-      <Card accent={C.red}>
-        <div style={sectionLabel}>Danger zone</div>
-        <h2 style={{ fontSize: 18, margin: '4px 0 12px' }}>Delete account</h2>
-        <p style={{ fontSize: 13, color: C.muted, marginTop: 0 }}>
-          This permanently deletes your account and all metrics. Type{' '}
-          <strong>DELETE</strong> to confirm.
-        </p>
-        <input
-          style={{ ...settingInput, marginTop: 0 }}
-          value={confirmDelete}
-          onChange={(e) => setConfirmDelete(e.target.value)}
-          placeholder="DELETE"
-        />
-        <div>
-          <button
-            style={{
-              ...smallBtn,
-              background: confirmDelete === 'DELETE' ? C.red : C.gray400,
-              cursor: confirmDelete === 'DELETE' ? 'pointer' : 'not-allowed',
-            }}
-            onClick={doDeleteAccount}
-            disabled={confirmDelete !== 'DELETE'}
-          >
-            Delete my account
-          </button>
-        </div>
-      </Card>
+      {user.role === 'admin' && <TeamAdmin currentUsername={user.username} />}
 
       <Card>
         <button
