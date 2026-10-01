@@ -56,41 +56,49 @@ module.exports = async function handler(req, res) {
     const salt = generateSalt();
     const password_hash = hashPassword(password, salt);
 
-    // security_question / security_answer_hash are NOT NULL in the schema but
-    // unused in the admin-managed model — store empty placeholders.
-    const insertRow = {
+    // Discover the real columns on metrics_data (don't assume the schema — the
+    // security-question columns were removed in a prior stage). An existing row
+    // (e.g. the admin) exposes the actual column names as its keys.
+    const { data: sampleRows } = await supabase
+      .from('metrics_data')
+      .select('*')
+      .limit(1);
+    const existingCols =
+      sampleRows && sampleRows[0] ? new Set(Object.keys(sampleRows[0])) : null;
+
+    // Candidate values; only those whose column actually exists are inserted.
+    // security_question/security_answer_hash are included ONLY as a fallback in
+    // case the live table still has them as NOT NULL.
+    const candidate = {
       username,
       display_name: displayName || username,
       password_hash,
       salt,
+      role,
+      data: {},
       security_question: '',
       security_answer_hash: '',
-      role,
     };
+    // Core columns always sent if schema discovery returns nothing.
+    const fallback = ['username', 'display_name', 'password_hash', 'salt', 'role', 'data'];
+
+    const insertRow = {};
+    for (const [k, v] of Object.entries(candidate)) {
+      const include = existingCols ? existingCols.has(k) : fallback.includes(k);
+      if (include) insertRow[k] = v;
+    }
 
     const { error } = await supabase.from('metrics_data').insert(insertRow);
     if (error) {
       if (error.code === '23505') {
         return res.status(409).json({ ok: false, error: 'That username already exists.' });
       }
-      // TEMP DIAGNOSTIC: surface the real Postgres/Supabase error so we can see
-      // the exact cause. Logs the payload KEYS (never the password) + full error.
       // eslint-disable-next-line no-console
       console.error('[admin/users] insert failed', {
         payloadKeys: Object.keys(insertRow),
         error,
       });
-      return res.status(500).json({
-        ok: false,
-        error: error.message || 'Could not create account.',
-        debug: {
-          message: error.message || null,
-          code: error.code || null,
-          details: error.details || null,
-          hint: error.hint || null,
-          payloadKeys: Object.keys(insertRow),
-        },
-      });
+      return res.status(500).json({ ok: false, error: 'Could not create account.' });
     }
 
     return res.status(200).json({
