@@ -58,7 +58,7 @@ module.exports = async function handler(req, res) {
 
     // security_question / security_answer_hash are NOT NULL in the schema but
     // unused in the admin-managed model — store empty placeholders.
-    const { error } = await supabase.from('metrics_data').insert({
+    const insertRow = {
       username,
       display_name: displayName || username,
       password_hash,
@@ -66,12 +66,31 @@ module.exports = async function handler(req, res) {
       security_question: '',
       security_answer_hash: '',
       role,
-    });
+    };
+
+    const { error } = await supabase.from('metrics_data').insert(insertRow);
     if (error) {
       if (error.code === '23505') {
         return res.status(409).json({ ok: false, error: 'That username already exists.' });
       }
-      return res.status(500).json({ ok: false, error: 'Could not create account.' });
+      // TEMP DIAGNOSTIC: surface the real Postgres/Supabase error so we can see
+      // the exact cause. Logs the payload KEYS (never the password) + full error.
+      // eslint-disable-next-line no-console
+      console.error('[admin/users] insert failed', {
+        payloadKeys: Object.keys(insertRow),
+        error,
+      });
+      return res.status(500).json({
+        ok: false,
+        error: error.message || 'Could not create account.',
+        debug: {
+          message: error.message || null,
+          code: error.code || null,
+          details: error.details || null,
+          hint: error.hint || null,
+          payloadKeys: Object.keys(insertRow),
+        },
+      });
     }
 
     return res.status(200).json({
