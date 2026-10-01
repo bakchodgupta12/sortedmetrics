@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   Area,
@@ -30,11 +30,18 @@ import {
   listYears,
   normaliseData,
   resetPassword,
-  saveData,
-  updateDisplayName,
-  verifyPassword,
   verifySecurityAnswer,
+  verifyPassword,
 } from './supabase';
+import {
+  apiGetData,
+  apiGetSession,
+  apiLogin,
+  apiLogout,
+  apiSaveData,
+  apiUpdateDisplayName,
+  canEditRole,
+} from './api';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Number formatting
@@ -229,14 +236,11 @@ function AuthScreen({ onLogin }) {
     setBusy(true);
     setError('');
     try {
-      const ok = await verifyPassword(row, password);
-      if (!ok) {
-        setError('Incorrect password.');
-        return;
-      }
-      onLogin(row);
+      // Password is verified server-side; no hashing or hash handling here.
+      const user = await apiLogin(username, password);
+      onLogin(user);
     } catch (err) {
-      setError(err.message || 'Login failed.');
+      setError(err.status === 401 ? 'Incorrect password.' : err.message || 'Login failed.');
     } finally {
       setBusy(false);
     }
@@ -259,7 +263,9 @@ function AuthScreen({ onLogin }) {
     setBusy(true);
     setError('');
     try {
-      const created = await createUser({
+      // Account creation stays on the direct client for now (account-lifecycle,
+      // handled in a later stage); then establish a server session via /api/login.
+      await createUser({
         username,
         password,
         securityQuestion: question,
@@ -267,7 +273,8 @@ function AuthScreen({ onLogin }) {
         displayName: displayName.trim() || username.trim(),
         initialYear: new Date().getFullYear(),
       });
-      onLogin(created);
+      const user = await apiLogin(username, password);
+      onLogin(user);
     } catch (err) {
       setError(err.message || 'Could not create account.');
     } finally {
@@ -294,8 +301,8 @@ function AuthScreen({ onLogin }) {
         return;
       }
       await resetPassword(username, password);
-      const refreshed = await getUser(username);
-      onLogin(refreshed);
+      const user = await apiLogin(username, password);
+      onLogin(user);
     } catch (err) {
       setError(err.message || 'Could not reset password.');
     } finally {
@@ -518,35 +525,23 @@ const linkBtn = {
 // ─────────────────────────────────────────────────────────────────────────────
 // App shell
 // ─────────────────────────────────────────────────────────────────────────────
-const SESSION_KEY = 'swm_username';
-
 function App() {
-  const [user, setUser] = useState(null); // the row
+  const [user, setUser] = useState(null); // { username, display_name, role }
   const [bootstrapping, setBootstrapping] = useState(true);
 
-  // Restore a session (username only — credentials are never stored).
+  // The server session cookie is the source of truth for who is logged in.
   useEffect(() => {
-    const saved = localStorage.getItem(SESSION_KEY);
-    if (!saved || !isConfigured) {
-      setBootstrapping(false);
-      return;
-    }
-    getUser(saved)
-      .then((row) => {
-        if (row) setUser(row);
-        else localStorage.removeItem(SESSION_KEY);
+    apiGetSession()
+      .then((u) => {
+        if (u) setUser(u);
       })
-      .catch(() => localStorage.removeItem(SESSION_KEY))
       .finally(() => setBootstrapping(false));
   }, []);
 
-  const handleLogin = (row) => {
-    localStorage.setItem(SESSION_KEY, row.username);
-    setUser(row);
-  };
+  const handleLogin = (u) => setUser(u);
 
-  const handleLogout = () => {
-    localStorage.removeItem(SESSION_KEY);
+  const handleLogout = async () => {
+    await apiLogout();
     setUser(null);
   };
 
@@ -576,43 +571,86 @@ function App() {
 // ─────────────────────────────────────────────────────────────────────────────
 const SAVE_DEBOUNCE_MS = 1500;
 
-function Dashboard({ user, setUser, onLogout }) {
-  const [data, setData] = useState(() => {
-    const norm = normaliseData(user.data);
-    if (Object.keys(norm.years).length === 0) {
-      norm.years[String(new Date().getFullYear())] = emptyYear();
-    }
-    return norm;
-  });
+// Whether the current user may edit (write). Consumed by editable cells so the
+// UI matches server enforcement (admin/editor can edit; viewer is read-only).
+const EditContext = React.createContext(true);
 
-  const years = useMemo(() => listYears(data), [data]);
-  const [activeYear, setActiveYear] = useState(() => {
-    const current = new Date().getFullYear();
-    const ys = listYears(data);
-    return ys.includes(current) ? current : ys[ys.length - 1] || current;
-  });
+function Dashboard({ user, setUser, onLogout }) {
+  const canEdit = canEditRole(user.role);
+
+  const [data, setData] = useState(null); // loaded from the server
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
+
+  const years = useMemo(() => (data ? listYears(data) : []), [data]);
+  const [activeYear, setActiveYear] = useState(() => new Date().getFullYear());
   const [activeTab, setActiveTab] = useState('Dashboard');
 
   // Save status: 'idle' | 'saving' | 'saved' | 'error'
   const [saveStatus, setSaveStatus] = useState('idle');
   const saveTimer = useRef(null);
-  const skipNextSave = useRef(true); // don't save on initial mount
+  const skipNextSave = useRef(true); // don't save on initial mount/load
+
+  // Load the metrics from the server once on mount (mirrors the old read).
+  useEffect(() => {
+    let cancelled = false;
+    apiGetData()
+      .then((resp) => {
+        if (cancelled) return;
+        const norm = normaliseData(resp.data);
+        if (Object.keys(norm.years).length === 0) {
+          norm.years[String(new Date().getFullYear())] = emptyYear();
+        }
+        const ys = listYears(norm);
+        const cur = new Date().getFullYear();
+        skipNextSave.current = true;
+        setData(norm);
+        setActiveYear(ys.includes(cur) ? cur : ys[ys.length - 1] || cur);
+        if (resp.user) setUser(resp.user); // keep role/display_name fresh
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        if (err.status === 401) {
+          onLogout();
+          return;
+        }
+        setLoadError('Could not load data.');
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const persist = useCallback(
     async (next) => {
       setSaveStatus('saving');
       try {
-        await saveData(user.username, next);
+        await apiSaveData(next);
         setSaveStatus('saved');
       } catch (err) {
+        if (err.status === 403) {
+          // Not permitted (viewer). The UI is read-only for viewers, so this
+          // should not normally happen — treat it as a safe no-op.
+          setSaveStatus('idle');
+          return;
+        }
+        if (err.status === 401) {
+          onLogout();
+          return;
+        }
         setSaveStatus('error');
       }
     },
-    [user.username]
+    [onLogout]
   );
 
   // Debounced auto-save whenever data changes.
   useEffect(() => {
+    if (data == null) return;
     if (skipNextSave.current) {
       skipNextSave.current = false;
       return;
@@ -625,23 +663,27 @@ function Dashboard({ user, setUser, onLogout }) {
   const refresh = useCallback(async () => {
     setSaveStatus('saving');
     try {
-      const row = await getUser(user.username);
-      if (row) {
-        const norm = normaliseData(row.data);
-        skipNextSave.current = true;
-        setData(norm);
-        setUser(row);
-        setSaveStatus('saved');
+      const resp = await apiGetData();
+      const norm = normaliseData(resp.data);
+      skipNextSave.current = true;
+      setData(norm);
+      if (resp.user) setUser(resp.user);
+      setSaveStatus('saved');
+    } catch (err) {
+      if (err.status === 401) {
+        onLogout();
+        return;
       }
-    } catch {
       setSaveStatus('error');
     }
-  }, [user.username, setUser]);
+  }, [setUser, onLogout]);
 
   // Edit a single metric cell for the active year.
   const updateMetric = useCallback(
     (metricKey, month, value) => {
+      if (!canEdit) return; // viewers are read-only
       setData((prev) => {
+        if (!prev) return prev;
         const y = String(activeYear);
         const year = prev.years[y] || emptyYear();
         const metric = { ...(year[metricKey] || {}) };
@@ -656,12 +698,14 @@ function Dashboard({ user, setUser, onLogout }) {
         };
       });
     },
-    [activeYear]
+    [activeYear, canEdit]
   );
 
   const updateNote = useCallback(
     (month, text) => {
+      if (!canEdit) return;
       setData((prev) => {
+        if (!prev) return prev;
         const y = String(activeYear);
         const year = prev.years[y] || emptyYear();
         const notes = { ...(year.notes || {}) };
@@ -673,13 +717,13 @@ function Dashboard({ user, setUser, onLogout }) {
         };
       });
     },
-    [activeYear]
+    [activeYear, canEdit]
   );
 
   // Year management
   const addYear = (year) => {
     setData((prev) => {
-      if (prev.years[year]) return prev;
+      if (!prev || prev.years[year]) return prev;
       return { ...prev, years: { ...prev.years, [year]: emptyYear() } };
     });
     setActiveYear(Number(year));
@@ -687,16 +731,33 @@ function Dashboard({ user, setUser, onLogout }) {
 
   const deleteYear = (year) => {
     setData((prev) => {
+      if (!prev) return prev;
       const next = { ...prev, years: { ...prev.years } };
       delete next.years[year];
       return next;
     });
     setActiveYear((cur) => {
       if (Number(year) !== cur) return cur;
-      const remaining = listYears(data).filter((y) => y !== Number(year));
+      const remaining = years.filter((y) => y !== Number(year));
       return remaining[remaining.length - 1] || new Date().getFullYear();
     });
   };
+
+  if (loading || !data) {
+    return (
+      <div
+        style={{
+          minHeight: '100vh',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          color: loadError ? C.red : C.muted,
+        }}
+      >
+        {loadError || 'Loading…'}
+      </div>
+    );
+  }
 
   const yearData = data.years[String(activeYear)] || emptyYear();
 
@@ -708,6 +769,7 @@ function Dashboard({ user, setUser, onLogout }) {
         activeYear={activeYear}
         onYearChange={setActiveYear}
         onAddYear={addYear}
+        canEdit={canEdit}
         saveStatus={saveStatus}
         onRefresh={refresh}
         onLogout={onLogout}
@@ -723,19 +785,22 @@ function Dashboard({ user, setUser, onLogout }) {
           padding: '24px 20px 64px',
         }}
       >
-        <TabContent
-          tab={activeTab}
-          yearData={yearData}
-          activeYear={activeYear}
-          years={years}
-          allYears={data.years}
-          user={user}
-          setUser={setUser}
-          updateMetric={updateMetric}
-          updateNote={updateNote}
-          onDeleteYear={deleteYear}
-          onLogout={onLogout}
-        />
+        <EditContext.Provider value={canEdit}>
+          <TabContent
+            tab={activeTab}
+            yearData={yearData}
+            activeYear={activeYear}
+            years={years}
+            allYears={data.years}
+            user={user}
+            setUser={setUser}
+            canEdit={canEdit}
+            updateMetric={updateMetric}
+            updateNote={updateNote}
+            onDeleteYear={deleteYear}
+            onLogout={onLogout}
+          />
+        </EditContext.Provider>
       </main>
     </div>
   );
@@ -760,6 +825,7 @@ function TopNav({
   activeYear,
   onYearChange,
   onAddYear,
+  canEdit,
   saveStatus,
   onRefresh,
   onLogout,
@@ -831,7 +897,7 @@ function TopNav({
               {y}
             </option>
           ))}
-          <option value="__add__">+ Add year…</option>
+          {canEdit && <option value="__add__">+ Add year…</option>}
         </select>
 
         <div
@@ -1107,6 +1173,7 @@ function valueAt(s, i) {
 // Editable cell + info tooltip
 // ─────────────────────────────────────────────────────────────────────────────
 function Cell({ value, unit, onCommit }) {
+  const canEdit = useContext(EditContext);
   const [focused, setFocused] = useState(false);
   const [draft, setDraft] = useState('');
   const shown = focused ? draft : value == null ? '' : fmtByUnit(value, unit);
@@ -1126,22 +1193,39 @@ function Cell({ value, unit, onCommit }) {
       value={shown}
       placeholder={DASH}
       inputMode="decimal"
-      onFocus={() => {
-        setFocused(true);
-        setDraft(value == null ? '' : String(value));
-      }}
-      onChange={(e) =>
-        // Allow only digits, thousands separators and a single decimal point.
-        // Strips letters, symbols and minus signs as they're typed/pasted.
-        setDraft(e.target.value.replace(/[^0-9.,]/g, ''))
+      readOnly={!canEdit}
+      tabIndex={canEdit ? undefined : -1}
+      onFocus={
+        canEdit
+          ? () => {
+              setFocused(true);
+              setDraft(value == null ? '' : String(value));
+            }
+          : undefined
       }
-      onBlur={() => {
-        commit();
-        setFocused(false);
-      }}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter') e.currentTarget.blur();
-      }}
+      onChange={
+        canEdit
+          ? (e) =>
+              // Allow only digits, thousands separators and a single decimal point.
+              // Strips letters, symbols and minus signs as they're typed/pasted.
+              setDraft(e.target.value.replace(/[^0-9.,]/g, ''))
+          : undefined
+      }
+      onBlur={
+        canEdit
+          ? () => {
+              commit();
+              setFocused(false);
+            }
+          : undefined
+      }
+      onKeyDown={
+        canEdit
+          ? (e) => {
+              if (e.key === 'Enter') e.currentTarget.blur();
+            }
+          : undefined
+      }
       style={{
         width: '100%',
         textAlign: 'right',
@@ -1150,9 +1234,10 @@ function Cell({ value, unit, onCommit }) {
         color: C.text,
         background: 'transparent',
         border: 'none',
-        borderBottom: `1px solid ${focused ? C.primary : 'transparent'}`,
+        borderBottom: `1px solid ${focused && canEdit ? C.primary : 'transparent'}`,
         padding: '6px 4px',
         outline: 'none',
+        cursor: canEdit ? 'text' : 'default',
       }}
     />
   );
@@ -2188,6 +2273,7 @@ function TabContent({
   years,
   user,
   setUser,
+  canEdit,
   updateMetric,
   updateNote,
   onDeleteYear,
@@ -2213,6 +2299,7 @@ function TabContent({
         <SettingsTab
           user={user}
           setUser={setUser}
+          canEdit={canEdit}
           activeYear={activeYear}
           years={years}
           onDeleteYear={onDeleteYear}
@@ -2230,7 +2317,7 @@ function TabContent({
 // ─────────────────────────────────────────────────────────────────────────────
 // Settings (shell-level: display name, password, year + account management)
 // ─────────────────────────────────────────────────────────────────────────────
-function SettingsTab({ user, setUser, activeYear, years, onDeleteYear, onLogout }) {
+function SettingsTab({ user, setUser, canEdit, activeYear, years, onDeleteYear, onLogout }) {
   const [displayName, setDisplayName] = useState(user.display_name || '');
   const [msg, setMsg] = useState('');
 
@@ -2244,8 +2331,8 @@ function SettingsTab({ user, setUser, activeYear, years, onDeleteYear, onLogout 
   const saveName = async () => {
     setMsg('');
     try {
-      await updateDisplayName(user.username, displayName.trim() || user.username);
-      setUser({ ...user, display_name: displayName.trim() || user.username });
+      const updated = await apiUpdateDisplayName(displayName.trim() || user.username);
+      setUser({ ...user, display_name: updated.display_name });
       setMsg('Display name updated.');
     } catch (e) {
       setMsg(e.message || 'Could not update.');
@@ -2255,7 +2342,10 @@ function SettingsTab({ user, setUser, activeYear, years, onDeleteYear, onLogout 
   const doChangePassword = async () => {
     setPwMsg('');
     try {
-      const ok = await verifyPassword(user, curPw);
+      // Account-lifecycle (direct client, to be migrated later): fetch the row
+      // to verify the current password, since `user` no longer carries hashes.
+      const row = await getUser(user.username);
+      const ok = row && (await verifyPassword(row, curPw));
       if (!ok) {
         setPwMsg('Current password is incorrect.');
         return;
@@ -2269,8 +2359,6 @@ function SettingsTab({ user, setUser, activeYear, years, onDeleteYear, onLogout 
         return;
       }
       await changePassword(user.username, newPw);
-      const refreshed = await getUser(user.username);
-      setUser(refreshed);
       setCurPw('');
       setNewPw('');
       setNewPw2('');
@@ -2325,15 +2413,22 @@ function SettingsTab({ user, setUser, activeYear, years, onDeleteYear, onLogout 
         <div style={sectionLabel}>Profile</div>
         <h2 style={{ fontSize: 18, margin: '4px 0 12px' }}>Display name</h2>
         <input
-          style={settingInput}
+          style={{ ...settingInput, opacity: canEdit ? 1 : 0.6 }}
           value={displayName}
           onChange={(e) => setDisplayName(e.target.value)}
+          disabled={!canEdit}
         />
-        <div>
-          <button style={smallBtn} onClick={saveName}>
-            Save
-          </button>
-        </div>
+        {canEdit ? (
+          <div>
+            <button style={smallBtn} onClick={saveName}>
+              Save
+            </button>
+          </div>
+        ) : (
+          <p style={{ fontSize: 12, color: C.muted, marginTop: 8 }}>
+            Your role is view-only, so the display name can't be changed.
+          </p>
+        )}
         <div style={{ fontSize: 12, color: C.muted, marginTop: 8 }}>
           Username: <strong>{user.username}</strong> (cannot be changed)
         </div>
@@ -2384,20 +2479,22 @@ function SettingsTab({ user, setUser, activeYear, years, onDeleteYear, onLogout 
         </div>
       </Card>
 
-      <Card accent={C.primary}>
-        <div style={sectionLabel}>Data</div>
-        <h2 style={{ fontSize: 18, margin: '4px 0 12px' }}>Delete year</h2>
-        <p style={{ fontSize: 13, color: C.muted, marginTop: 0 }}>
-          Permanently remove all data for the currently selected year (
-          {activeYear}).
-        </p>
-        <button
-          style={{ ...smallBtn, background: C.red, marginTop: 0 }}
-          onClick={doDeleteYear}
-        >
-          Delete {activeYear}
-        </button>
-      </Card>
+      {canEdit && (
+        <Card accent={C.primary}>
+          <div style={sectionLabel}>Data</div>
+          <h2 style={{ fontSize: 18, margin: '4px 0 12px' }}>Delete year</h2>
+          <p style={{ fontSize: 13, color: C.muted, marginTop: 0 }}>
+            Permanently remove all data for the currently selected year (
+            {activeYear}).
+          </p>
+          <button
+            style={{ ...smallBtn, background: C.red, marginTop: 0 }}
+            onClick={doDeleteYear}
+          >
+            Delete {activeYear}
+          </button>
+        </Card>
+      )}
 
       <Card accent={C.red}>
         <div style={sectionLabel}>Danger zone</div>
